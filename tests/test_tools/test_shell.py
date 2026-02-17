@@ -1,0 +1,56 @@
+"""Tests for shell tool."""
+
+from __future__ import annotations
+
+import pytest
+
+from noscope.tools.base import ToolContext
+from noscope.tools.shell import ShellTool
+
+
+@pytest.mark.asyncio
+class TestShellTool:
+    async def test_echo(self, tool_context: ToolContext) -> None:
+        tool = ShellTool()
+        result = await tool.execute({"command": "echo hello"}, tool_context)
+        assert result.status == "ok"
+        assert "hello" in result.display
+
+    async def test_exit_code(self, tool_context: ToolContext) -> None:
+        tool = ShellTool()
+        result = await tool.execute({"command": "exit 1"}, tool_context)
+        assert result.status == "error"
+        assert result.data["exit_code"] == 1
+
+    async def test_timeout(self, tool_context: ToolContext) -> None:
+        tool = ShellTool()
+        result = await tool.execute(
+            {"command": "sleep 10", "timeout": 1}, tool_context
+        )
+        assert result.status == "error"
+        assert "timed out" in result.display.lower()
+
+    async def test_denied_command(self, tool_context: ToolContext) -> None:
+        tool = ShellTool()
+        result = await tool.execute({"command": "sudo rm -rf /"}, tool_context)
+        assert result.status == "error"
+        assert "denied" in result.display.lower()
+
+    async def test_cwd(self, tool_context: ToolContext) -> None:
+        subdir = tool_context.workspace / "subdir"
+        subdir.mkdir()
+        tool = ShellTool()
+        result = await tool.execute(
+            {"command": "pwd", "cwd": "subdir"}, tool_context
+        )
+        assert result.status == "ok"
+        assert "subdir" in result.display
+
+    async def test_secret_redaction(self, tool_context: ToolContext) -> None:
+        tool_context.secrets = {"MY_SECRET": "supersecret123"}
+        tool = ShellTool()
+        result = await tool.execute(
+            {"command": "echo supersecret123"}, tool_context
+        )
+        assert "supersecret123" not in result.display
+        assert "[REDACTED:MY_SECRET]" in result.display

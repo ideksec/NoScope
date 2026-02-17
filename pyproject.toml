@@ -1,0 +1,43 @@
+[project]
+name = "noscope"
+version = "0.1.0"
+description = "Time-boxed autonomous agent orchestration tool that builds runnable software MVPs from written specs"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "typer[all]",
+    "rich",
+    "pydantic>=2.0",
+    "pydantic-settings",
+    "httpx",
+    "pyyaml",
+    "anthropic",
+    "openai",
+    "python-frontmatter",
+]
+
+[project.optional-dependencies]
+tui = ["textual>=1.0"]
+dev = ["pytest", "pytest-asyncio", "ruff", "mypy", "pytest-cov"]
+
+[project.scripts]
+noscope = "noscope.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["frontmatter.*", "anthropic.*", "openai.*"]
+ignore_missing_imports = true

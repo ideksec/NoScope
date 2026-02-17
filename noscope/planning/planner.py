@@ -1,0 +1,87 @@
+"""LLM-based plan generation from spec."""
+
+from __future__ import annotations
+
+import json
+
+from noscope.llm.base import LLMProvider, Message
+from noscope.planning.models import PlanOutput
+from noscope.spec.models import SpecInput
+
+PLAN_SYSTEM_PROMPT = """\
+You are a software architect planning an MVP build within a strict timebox.
+
+Given a project specification, produce a structured JSON plan. Your output must be valid JSON matching this schema:
+
+{
+  "requested_capabilities": [
+    {"cap": "workspace_rw|shell_exec|net_http|git|docker|secrets:<NAME>", "why": "justification", "risk": "low|medium|high"}
+  ],
+  "tasks": [
+    {"id": "t1", "title": "Task name", "kind": "edit|shell|test", "priority": "mvp|stretch", "description": "What to do"}
+  ],
+  "mvp_definition": ["What counts as done"],
+  "exclusions": ["What is explicitly NOT being built"],
+  "acceptance_plan": [
+    {"name": "check name", "cmd": "shell command or null", "must_pass": true}
+  ]
+}
+
+Rules:
+- Always request workspace_rw capability
+- Request shell_exec if any commands need to run (pip install, npm install, etc.)
+- Request git if the project should be version controlled
+- Mark tasks as "mvp" if they're essential, "stretch" if nice-to-have
+- Order tasks by dependency (earlier tasks first)
+- Keep the plan achievable within the timebox
+- Focus on "works over complete" — a running demo beats perfect code
+- Include acceptance checks that can verify the build works
+
+Respond ONLY with the JSON object, no markdown fences or explanation.
+"""
+
+
+async def plan(spec: SpecInput, provider: LLMProvider) -> PlanOutput:
+    """Generate a build plan from a spec using an LLM."""
+    user_content = f"""Project: {spec.name}
+Timebox: {spec.timebox} ({spec.timebox_seconds}s)
+Constraints: {json.dumps(spec.constraints)}
+Acceptance criteria: {json.dumps([a.raw for a in spec.acceptance])}
+Stack preferences: {json.dumps(spec.stack_prefs or [])}
+Repo mode: {spec.repo_mode}
+
+Spec body:
+{spec.body}
+"""
+
+    messages = [
+        Message(role="system", content=PLAN_SYSTEM_PROMPT),
+        Message(role="user", content=user_content),
+    ]
+
+    max_retries = 2
+    last_error: Exception | None = None
+
+    for attempt in range(max_retries + 1):
+        response = await provider.complete(messages)
+        try:
+            raw = response.content.strip()
+            # Strip markdown fences if present
+            if raw.startswith("```"):
+                lines = raw.split("\n")
+                raw = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
+
+            data = json.loads(raw)
+            return PlanOutput.model_validate(data)
+        except (json.JSONDecodeError, Exception) as e:
+            last_error = e
+            if attempt < max_retries:
+                messages.append(Message(role="assistant", content=response.content))
+                messages.append(
+                    Message(
+                        role="user",
+                        content=f"Your response was not valid JSON. Error: {e}. Please try again with valid JSON only.",
+                    )
+                )
+
+    raise ValueError(f"Failed to generate valid plan after {max_retries + 1} attempts: {last_error}")

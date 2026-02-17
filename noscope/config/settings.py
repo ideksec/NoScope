@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 from pydantic import model_validator
@@ -22,10 +23,17 @@ class NoscopeSettings(BaseSettings):
 
     @model_validator(mode="after")
     def check_api_keys(self) -> NoscopeSettings:
+        # Also accept standard env vars without NOSCOPE_ prefix as fallback
+        if not self.anthropic_api_key:
+            self.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not self.openai_api_key:
+            self.openai_api_key = os.environ.get("OPENAI_API_KEY")
+
         if not self.anthropic_api_key and not self.openai_api_key:
             raise ValueError(
                 "At least one API key is required: "
-                "set NOSCOPE_ANTHROPIC_API_KEY or NOSCOPE_OPENAI_API_KEY"
+                "set NOSCOPE_ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY) "
+                "or NOSCOPE_OPENAI_API_KEY (or OPENAI_API_KEY)"
             )
         return self
 

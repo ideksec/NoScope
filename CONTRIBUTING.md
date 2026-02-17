@@ -6,7 +6,7 @@ Thanks for your interest in contributing to NoScope!
 
 ```bash
 # Clone the repo
-git clone https://github.com/yourusername/noscope.git
+git clone https://github.com/ideksec/NoScope.git
 cd noscope
 
 # Install uv (if not already installed)

@@ -101,7 +101,7 @@ Every run produces:
 ## Development
 
 ```bash
-git clone https://github.com/yourusername/noscope.git
+git clone https://github.com/ideksec/NoScope.git
 cd noscope
 make dev        # Install with all extras
 make test       # Run tests

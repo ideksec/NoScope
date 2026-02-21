@@ -241,10 +241,6 @@ class Orchestrator:
                 encoding="utf-8",
             )
 
-        # Show cost
-        provider_name = self.settings.default_provider or "anthropic"
-        self.ui.cost_summary(tokens.input_tokens, tokens.output_tokens, provider_name, self._model)
-
         event_log.emit(
             phase="DONE",
             event_type="run.complete",
@@ -257,13 +253,38 @@ class Orchestrator:
         )
         event_log.close()
 
-        # 12. LAUNCH — start the app for the user if it's a web app
-        verified_ok = verify_data[0] if "verify_data" in locals() and verify_data else False
-        if verified_ok:
-            launch_cmd, launch_url = _detect_launch(workspace)
-            if launch_cmd:
-                self.ui.launch_app(workspace, launch_cmd, launch_url)
-                await _run_server(launch_cmd, workspace)
+        # Detect launch info
+        verified_ok = verify_data[0] if "verify_data" in locals() and verify_data else None
+        verify_msg = verify_data[1] if "verify_data" in locals() and verify_data else ""
+        launch_cmd, launch_url = _detect_launch(workspace)
+
+        completed_count = sum(1 for t in tasks if t.completed) if tasks else 0
+        checks_passed = sum(1 for r in acceptance_results if r.get("passed"))
+
+        # Show final summary — ALWAYS
+        provider_name = self.settings.default_provider or "anthropic"
+        self.ui.final_summary(
+            spec_name=spec.name,
+            timebox=spec.timebox,
+            workspace=workspace,
+            run_dir=run_dir.path,
+            tasks_completed=completed_count,
+            tasks_total=len(tasks),
+            checks_passed=checks_passed,
+            checks_total=len(acceptance_results),
+            verified=verified_ok,
+            verify_msg=verify_msg,
+            launch_url=launch_url if launch_cmd else None,
+            input_tokens=tokens.input_tokens,
+            output_tokens=tokens.output_tokens,
+            provider=provider_name,
+            model=self._model,
+        )
+
+        # 12. LAUNCH — start the app for the user if verified
+        if verified_ok and launch_cmd:
+            self.ui.launch_app(workspace, launch_cmd, launch_url)
+            await _run_server(launch_cmd, workspace)
 
         return run_dir.path
 

@@ -56,7 +56,7 @@ def run(
     from noscope.orchestrator import Orchestrator
 
     orchestrator = Orchestrator(settings, console=console)
-    run_dir = asyncio.run(
+    asyncio.run(
         orchestrator.run(
             spec_path=spec,
             timebox=time,
@@ -65,8 +65,6 @@ def run(
             auto_approve=auto_approve,
         )
     )
-
-    ui.complete(run_dir)
 
 
 @app.command()
@@ -226,7 +224,7 @@ acceptance:
     from noscope.orchestrator import Orchestrator
 
     orchestrator = Orchestrator(settings, console=console)
-    run_dir = asyncio.run(
+    asyncio.run(
         orchestrator.run(
             spec_input=spec,
             timebox=timebox,
@@ -234,8 +232,6 @@ acceptance:
             auto_approve=auto_approve,
         )
     )
-
-    ui.complete(run_dir)
 
 
 @app.command()

@@ -173,14 +173,74 @@ class ConsoleUI:
             )
         )
 
-    def complete(self, run_dir: Path) -> None:
+    def final_summary(
+        self,
+        spec_name: str,
+        timebox: str,
+        workspace: Path,
+        run_dir: Path,
+        tasks_completed: int,
+        tasks_total: int,
+        checks_passed: int,
+        checks_total: int,
+        verified: bool | None,
+        verify_msg: str,
+        launch_url: str | None,
+        input_tokens: int,
+        output_tokens: int,
+        provider: str,
+        model: str,
+    ) -> None:
+        """Show comprehensive final summary — always displayed."""
+        # Status line
+        if verified:
+            status = "[bold green]MVP VERIFIED[/bold green]"
+            border = "green"
+        elif verified is False:
+            status = "[bold red]MVP FAILED[/bold red]"
+            border = "red"
+        else:
+            status = "[bold yellow]NOT VERIFIED[/bold yellow] (deadline expired)"
+            border = "yellow"
+
+        # Build info lines
+        lines = [
+            f"  Status:      {status}",
+            f"  Project:     [bold]{spec_name}[/bold]",
+            f"  Timebox:     {timebox}",
+            f"  Tasks:       {tasks_completed}/{tasks_total} completed",
+            f"  Checks:      {checks_passed}/{checks_total} passed",
+        ]
+
+        if verify_msg:
+            lines.append(f"  Verify:      {verify_msg[:80]}")
+
+        if launch_url:
+            lines.append(f"  URL:         [bold cyan underline]{launch_url}[/bold cyan underline]")
+
+        lines.append("")
+        lines.append(f"  Workspace:   [cyan]{workspace}[/cyan]")
+        lines.append(f"  Handoff:     [cyan]{run_dir / 'handoff.md'}[/cyan]")
+        lines.append(f"  Event log:   [cyan]{run_dir / 'events.jsonl'}[/cyan]")
+
+        # Cost
+        pricing: dict[str, tuple[float, float]] = {
+            "claude-sonnet-4-20250514": (3.0, 15.0),
+            "claude-haiku-4-5-20251001": (0.80, 4.0),
+            "gpt-4o": (2.50, 10.0),
+            "gpt-4o-mini": (0.15, 0.60),
+        }
+        input_price, output_price = pricing.get(model, (3.0, 15.0))
+        cost = (input_tokens / 1_000_000 * input_price) + (output_tokens / 1_000_000 * output_price)
+        lines.append(
+            f"  Cost:        ${cost:.4f} ({input_tokens:,} in / {output_tokens:,} out)"
+        )
+
         self.console.print(
             Panel(
-                f"[bold green]Run complete![/bold green]\n\n"
-                f"Run directory: [cyan]{run_dir}[/cyan]\n"
-                f"Handoff report: [cyan]{run_dir / 'handoff.md'}[/cyan]\n"
-                f"Event log: [cyan]{run_dir / 'events.jsonl'}[/cyan]",
-                title="[bold]Done[/bold]",
-                border_style="green",
+                "\n".join(lines),
+                title=f"[bold]NoScope — {spec_name}[/bold]",
+                border_style=border,
+                padding=(1, 2),
             )
         )

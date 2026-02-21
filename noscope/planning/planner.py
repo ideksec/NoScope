@@ -31,15 +31,20 @@ Given a project specification, produce a structured JSON plan. Your output must 
   ]
 }
 
-Rules:
-- Always request workspace_rw capability
-- Request shell_exec if any commands need to run (pip install, npm install, etc.)
-- Request git if the project should be version controlled
-- Mark tasks as "mvp" if they're essential, "stretch" if nice-to-have
-- Order tasks by dependency (earlier tasks first)
-- Keep the plan achievable within the timebox
-- Focus on "works over complete" — a running demo beats perfect code
-- Include acceptance checks that can verify the build works
+CRITICAL RULES:
+- THE APP MUST RUN. A broken app is a total failure regardless of how many features it has.
+- Always request workspace_rw and shell_exec capabilities
+- One of the FIRST MVP tasks MUST be to create the core app structure and install dependencies
+- The LAST MVP task MUST be "Install dependencies and verify app starts"
+- Order tasks: project setup → core features → polish → install+verify
+- Acceptance checks must use paths that match where files are actually created
+- Do NOT spend tasks on mock data files or placeholder content — inline minimal data in code
+- Scale ambition to timebox:
+  - ≤5m: Bare minimum working app (3-4 MVP tasks). Simple is better than ambitious.
+  - 5-10m: Solid MVP with core features (5-6 MVP tasks). Good structure and styling.
+  - 10-20m: Full-featured MVP (6-8 MVP tasks + stretch tasks). Polish the UI, add edge cases.
+  - 20m+: Comprehensive app (8+ MVP tasks + stretch tasks). Build it properly with good UX.
+- Mark stretch tasks for features to add if time permits — these make the app BETTER, not just WORKING
 
 Respond ONLY with the JSON object, no markdown fences or explanation.
 """

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 from noscope.llm.base import LLMProvider, Message
 from noscope.planning.models import PlanOutput
 from noscope.spec.models import SpecInput
+
+if TYPE_CHECKING:
+    from noscope.phases import TokenTracker
 
 PLAN_SYSTEM_PROMPT = """\
 You are a software architect planning an MVP build within a strict timebox.
@@ -41,7 +45,7 @@ Respond ONLY with the JSON object, no markdown fences or explanation.
 """
 
 
-async def plan(spec: SpecInput, provider: LLMProvider) -> PlanOutput:
+async def plan(spec: SpecInput, provider: LLMProvider, tokens: TokenTracker | None = None) -> PlanOutput:
     """Generate a build plan from a spec using an LLM."""
     user_content = f"""Project: {spec.name}
 Timebox: {spec.timebox} ({spec.timebox_seconds}s)
@@ -64,6 +68,8 @@ Spec body:
 
     for attempt in range(max_retries + 1):
         response = await provider.complete(messages)
+        if tokens:
+            tokens.add(response.usage)
         try:
             raw = response.content.strip()
             # Strip markdown fences if present

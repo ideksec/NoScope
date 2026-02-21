@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
@@ -10,7 +11,7 @@ from rich.table import Table
 
 from noscope import __version__
 from noscope.capabilities import CapabilityRequest
-from noscope.deadline import Phase
+from noscope.deadline import Deadline, Phase
 
 
 class ConsoleUI:
@@ -18,6 +19,8 @@ class ConsoleUI:
 
     def __init__(self, console: Console | None = None) -> None:
         self.console = console or Console()
+        self._current_phase = ""
+        self._last_activity = ""
 
     def header(self, spec_name: str, timebox: str) -> None:
         self.console.print(
@@ -38,17 +41,38 @@ class ConsoleUI:
             Phase.HANDOFF: "blue",
         }
         color = colors.get(phase, "white")
+        self._current_phase = phase.value
         self.console.print(
             f"\n[{color} bold]▶ [{phase.value}][/{color} bold] {message} "
             f"[dim]({remaining} remaining)[/dim]"
         )
 
-    def tool_execution(self, tool_name: str, display: str, elapsed: float) -> None:
-        truncated = display[:500] + "..." if len(display) > 500 else display
-        self.console.print(f"  [dim]⚡ {tool_name}[/dim] ({elapsed:.1f}s)")
-        if truncated.strip():
-            for line in truncated.strip().split("\n")[:10]:
-                self.console.print(f"    [dim]{line}[/dim]")
+    def tool_activity(self, tool_name: str, summary: str, deadline: Deadline) -> None:
+        """Show a tool execution as it happens with current time remaining."""
+        remaining = deadline.format_remaining()
+        # Truncate long summaries
+        if len(summary) > 80:
+            summary = summary[:77] + "..."
+        self.console.print(
+            f"  [dim]⚡ {tool_name}[/dim] [dim italic]{summary}[/dim italic] "
+            f"[dim]({remaining})[/dim]"
+        )
+
+    def task_complete(self, task_id: str, title: str, deadline: Deadline) -> None:
+        """Show a task completion."""
+        remaining = deadline.format_remaining()
+        self.console.print(
+            f"  [green]✓[/green] [bold]{task_id}[/bold] {title} [dim]({remaining})[/dim]"
+        )
+
+    def llm_thinking(self, summary: str, deadline: Deadline) -> None:
+        """Show what the LLM is doing."""
+        remaining = deadline.format_remaining()
+        if len(summary) > 100:
+            summary = summary[:97] + "..."
+        self.console.print(
+            f"  [dim]💭 {summary}[/dim] [dim]({remaining})[/dim]"
+        )
 
     def capability_table(self, requests: list[CapabilityRequest]) -> None:
         table = Table(title="Capability Requests", show_header=True, header_style="bold")
@@ -85,7 +109,7 @@ class ConsoleUI:
             )
         )
 
-    def acceptance_results(self, results: list[dict]) -> None:  # type: ignore[type-arg]
+    def acceptance_results(self, results: list[dict[str, Any]]) -> None:
         table = Table(title="Acceptance Results", show_header=True, header_style="bold")
         table.add_column("Check", style="cyan")
         table.add_column("Result", justify="center")
@@ -100,6 +124,54 @@ class ConsoleUI:
             table.add_row(r.get("name", "unknown"), status)
 
         self.console.print(table)
+
+    def verify_result(self, success: bool, message: str) -> None:
+        """Show the MVP verification result."""
+        if success:
+            self.console.print(
+                Panel(
+                    f"[bold green]MVP VERIFIED[/bold green]\n\n{message}",
+                    border_style="green",
+                )
+            )
+        else:
+            self.console.print(
+                Panel(
+                    f"[bold red]MVP VERIFICATION FAILED[/bold red]\n\n{message}",
+                    border_style="red",
+                )
+            )
+
+    def cost_summary(self, input_tokens: int, output_tokens: int, provider: str, model: str) -> None:
+        """Show estimated cost of the run."""
+        # Pricing per million tokens (approximate, as of 2025)
+        pricing: dict[str, tuple[float, float]] = {
+            "claude-sonnet-4-20250514": (3.0, 15.0),
+            "claude-haiku-4-5-20251001": (0.80, 4.0),
+            "gpt-4o": (2.50, 10.0),
+            "gpt-4o-mini": (0.15, 0.60),
+        }
+        input_price, output_price = pricing.get(model, (3.0, 15.0))
+        cost = (input_tokens / 1_000_000 * input_price) + (output_tokens / 1_000_000 * output_price)
+
+        self.console.print(
+            f"\n  [dim]Tokens: {input_tokens:,} in / {output_tokens:,} out "
+            f"| Estimated cost: ${cost:.4f} ({provider}/{model})[/dim]"
+        )
+
+    def launch_app(self, workspace: Path, command: str, url: str) -> None:
+        """Show that the app is being launched for the user."""
+        self.console.print(
+            Panel(
+                f"[bold green]Launching your app![/bold green]\n\n"
+                f"Directory: [cyan]{workspace}[/cyan]\n"
+                f"Command: [bold]{command}[/bold]\n\n"
+                f"Open in your browser: [bold cyan underline]{url}[/bold cyan underline]\n\n"
+                f"[dim]Press Ctrl+C to stop the server[/dim]",
+                title="[bold green]LIVE DEMO[/bold green]",
+                border_style="green",
+            )
+        )
 
     def complete(self, run_dir: Path) -> None:
         self.console.print(

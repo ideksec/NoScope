@@ -18,8 +18,8 @@ class Phase(StrEnum):
 DEFAULT_ALLOCATION: dict[Phase, float] = {
     Phase.PLAN: 0.10,
     Phase.REQUEST: 0.00,  # REQUEST is interactive, effectively zero budget
-    Phase.BUILD: 0.60,
-    Phase.HARDEN: 0.25,
+    Phase.BUILD: 0.50,
+    Phase.HARDEN: 0.35,  # Includes verification — must have time to get MVP running
     Phase.HANDOFF: 0.05,
 }
 

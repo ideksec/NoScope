@@ -3,12 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 from noscope.capabilities import Capability
 from noscope.tools.base import Tool, ToolContext, ToolResult
 from noscope.tools.redaction import redact
 from noscope.tools.safety import check_command_safety
+
+
+def _clean_env() -> dict[str, str]:
+    """Build a clean environment that doesn't leak NoScope's own venv."""
+    env = os.environ.copy()
+    # Remove virtual environment variables so workspace commands use system Python
+    env.pop("VIRTUAL_ENV", None)
+    # Clean PATH: remove any .venv/bin entries from NoScope's own environment
+    if "PATH" in env:
+        path_parts = env["PATH"].split(os.pathsep)
+        cleaned = [p for p in path_parts if ".venv" not in p]
+        env["PATH"] = os.pathsep.join(cleaned)
+    return env
 
 
 class ShellTool(Tool):
@@ -55,6 +69,7 @@ class ShellTool(Tool):
             proc = await asyncio.create_subprocess_shell(
                 command,
                 cwd=str(cwd),
+                env=_clean_env(),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

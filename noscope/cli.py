@@ -55,7 +55,7 @@ def run(
 
     from noscope.orchestrator import Orchestrator
 
-    orchestrator = Orchestrator(settings)
+    orchestrator = Orchestrator(settings, console=console)
     run_dir = asyncio.run(
         orchestrator.run(
             spec_path=spec,

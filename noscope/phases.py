@@ -130,6 +130,9 @@ class BuildPhase:
         stretch_tasks = [t for t in plan.tasks if t.priority == "stretch"]
         all_tasks = mvp_tasks + stretch_tasks
 
+        # Track tasks by ID for completion marking
+        task_map = {t.id: t for t in all_tasks}
+
         # Build system prompt
         system = self._build_system_prompt(plan, context.workspace)
         messages: list[Message] = [Message(role="system", content=system)]
@@ -150,6 +153,20 @@ class BuildPhase:
             ToolSchema(name=s["name"], description=s["description"], parameters=s["parameters"])
             for s in dispatcher.to_schemas()
         ]
+        # Add mark_task_complete tool for explicit task tracking
+        tool_schemas.append(
+            ToolSchema(
+                name="mark_task_complete",
+                description="Mark a task as completed. Call this after finishing each task.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "task_id": {"type": "string", "description": "The task ID (e.g., t1, t2)"},
+                    },
+                    "required": ["task_id"],
+                },
+            )
+        )
 
         # Agent loop
         max_iterations = 200
@@ -209,6 +226,34 @@ class BuildPhase:
 
             # Execute tool calls
             for tc in response.tool_calls:
+                # Handle the virtual mark_task_complete tool
+                if tc.name == "mark_task_complete":
+                    task_id = tc.arguments.get("task_id", "")
+                    if task_id in task_map:
+                        task_map[task_id].completed = True
+                        event_log.emit(
+                            phase=Phase.BUILD.value,
+                            event_type="task.complete",
+                            summary=f"Task {task_id} completed: {task_map[task_id].title}",
+                            data={"task_id": task_id},
+                        )
+                        messages.append(
+                            Message(
+                                role="tool",
+                                content=f"Task {task_id} marked as complete.",
+                                tool_call_id=tc.id,
+                            )
+                        )
+                    else:
+                        messages.append(
+                            Message(
+                                role="tool",
+                                content=f"Unknown task ID: {task_id}",
+                                tool_call_id=tc.id,
+                            )
+                        )
+                    continue
+
                 result = await dispatcher.dispatch(tc.name, tc.arguments, context)
                 messages.append(
                     Message(
@@ -217,15 +262,6 @@ class BuildPhase:
                         tool_call_id=tc.id,
                     )
                 )
-
-                # Mark tasks as completed if the LLM signals it
-                for task in all_tasks:
-                    if (
-                        not task.completed
-                        and task.id in response.content
-                        and ("complete" in response.content.lower() or "done" in response.content.lower())
-                    ):
-                        task.completed = True
 
         # Mark remaining tasks based on what was actually built
         return all_tasks
@@ -240,9 +276,11 @@ Rules:
 - Write clean, working code
 - Focus on MVP tasks first, stretch tasks only if time permits
 - Use the tools provided to create files, run commands, etc.
-- After completing each task, briefly state which task ID you finished
+- After completing each task, call mark_task_complete with the task ID
 - If something fails, try to fix it or work around it
 - Prefer simple, working solutions over complex ones
+- Use "python3 -m pip" instead of bare "pip" for installing packages
+- Use "python3" instead of "python" for running scripts
 - When done with all tasks, say "BUILD COMPLETE" in your response
 
 MVP definition: {json.dumps(plan.mvp_definition)}

@@ -81,8 +81,12 @@ def doctor() -> None:
     ok = v >= (3, 12)
     checks.append(("Python ≥ 3.12", ok, f"{v.major}.{v.minor}.{v.micro}"))
 
-    # API keys
+    # API keys — check env vars and .env file
     import os
+
+    from dotenv import load_dotenv
+
+    load_dotenv()
     has_anthropic = bool(os.environ.get("NOSCOPE_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"))
     has_openai = bool(os.environ.get("NOSCOPE_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY"))
     checks.append(("Anthropic API key", has_anthropic, "set" if has_anthropic else "not set"))

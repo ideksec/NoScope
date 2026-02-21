@@ -4,17 +4,49 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
+from collections.abc import Mapping
 from typing import Any
 
 from noscope.capabilities import Capability
 from noscope.tools.base import Tool, ToolContext, ToolResult
-from noscope.tools.redaction import redact
-from noscope.tools.safety import check_command_safety
+from noscope.tools.redaction import redact_text
+from noscope.tools.safety import check_command_safety, resolve_workspace_path
+
+_EXPLICIT_SENSITIVE_ENV_KEYS = {
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "NOSCOPE_ANTHROPIC_API_KEY",
+    "NOSCOPE_OPENAI_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AZURE_OPENAI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITLAB_TOKEN",
+    "NPM_TOKEN",
+    "PYPI_TOKEN",
+    "HF_TOKEN",
+    "SLACK_BOT_TOKEN",
+}
+
+_SENSITIVE_ENV_KEY_PATTERN = re.compile(
+    r"(?:^|_)(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?|PRIVATE[_-]?KEY|COOKIE|AUTH)(?:$|_)",
+    re.IGNORECASE,
+)
 
 
-def _clean_env() -> dict[str, str]:
-    """Build a clean environment that doesn't leak NoScope's own venv."""
-    env = os.environ.copy()
+def build_execution_env(base_env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Build an execution environment with sensitive values stripped."""
+    env = dict(base_env) if base_env is not None else os.environ.copy()
+
+    # Remove sensitive credentials from subprocess visibility.
+    for key in list(env):
+        if key in _EXPLICIT_SENSITIVE_ENV_KEYS or _SENSITIVE_ENV_KEY_PATTERN.search(key):
+            env.pop(key, None)
+
     # Remove virtual environment variables so workspace commands use system Python
     env.pop("VIRTUAL_ENV", None)
     # Clean PATH: remove any .venv/bin entries from NoScope's own environment
@@ -61,7 +93,10 @@ class ShellTool(Tool):
         # Resolve working directory
         cwd = context.workspace
         if "cwd" in args and args["cwd"] != ".":
-            cwd = context.workspace / args["cwd"]
+            try:
+                cwd = resolve_workspace_path(args["cwd"], context.workspace)
+            except ValueError as e:
+                return ToolResult.error(str(e))
             if not cwd.is_dir():
                 return ToolResult.error(f"Working directory not found: {args['cwd']}")
 
@@ -69,7 +104,7 @@ class ShellTool(Tool):
             proc = await asyncio.create_subprocess_shell(
                 command,
                 cwd=str(cwd),
-                env=_clean_env(),
+                env=build_execution_env(),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -82,8 +117,8 @@ class ShellTool(Tool):
         except OSError as e:
             return ToolResult.error(f"Failed to execute: {e}")
 
-        stdout = redact(stdout_bytes.decode("utf-8", errors="replace"), context.secrets)
-        stderr = redact(stderr_bytes.decode("utf-8", errors="replace"), context.secrets)
+        stdout = redact_text(stdout_bytes.decode("utf-8", errors="replace"), context.secrets)
+        stderr = redact_text(stderr_bytes.decode("utf-8", errors="replace"), context.secrets)
         exit_code = proc.returncode or 0
 
         # Truncate very long output

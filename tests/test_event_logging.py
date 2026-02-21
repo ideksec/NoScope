@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from noscope.logging.events import EventLog, RunDir
@@ -66,3 +67,29 @@ class TestEventLog:
 
         event = json.loads(rd.events_path.read_text().strip())
         assert event["result"]["passed"] is True
+
+    def test_emit_redacts_sensitive_patterns(self, tmp_path: Path) -> None:
+        rd = RunDir(base=tmp_path / "runs")
+        log = EventLog(rd)
+        log.emit(
+            "BUILD",
+            "tool.exec",
+            "OPENAI_API_KEY=sk-1234567890abcdefghijklmno",
+            data={"auth": "Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz123456"},
+        )
+        log.close()
+
+        raw = rd.events_path.read_text(encoding="utf-8")
+        assert "sk-1234567890abcdefghijklmno" not in raw
+        assert "sk-abcdefghijklmnopqrstuvwxyz123456" not in raw
+        assert "[REDACTED:auto]" in raw
+
+    def test_event_log_permissions_owner_only(self, tmp_path: Path) -> None:
+        rd = RunDir(base=tmp_path / "runs")
+        log = EventLog(rd)
+        log.emit("BUILD", "test", "hello")
+        log.close()
+
+        if os.name == "posix":
+            mode = rd.events_path.stat().st_mode & 0o777
+            assert mode & 0o077 == 0

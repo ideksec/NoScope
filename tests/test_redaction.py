@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from noscope.tools.redaction import redact, redact_env_vars
+from noscope.tools.redaction import redact, redact_env_vars, redact_structured
 
 
 class TestRedact:
@@ -35,6 +35,33 @@ class TestRedactEnvVars:
         result = redact_env_vars(text)
         assert "sk-ant-" not in result
 
+    def test_authorization_header_pattern(self) -> None:
+        text = "Authorization: Bearer sk-test-token-abcdefghijklmnop"
+        result = redact_env_vars(text)
+        assert "sk-test-token-abcdefghijklmnop" not in result
+        assert "[REDACTED:auto]" in result
+
+    def test_private_key_block_pattern(self) -> None:
+        text = (
+            "-----BEGIN PRIVATE KEY-----\n"
+            "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC...\n"
+            "-----END PRIVATE KEY-----"
+        )
+        result = redact_env_vars(text)
+        assert "PRIVATE KEY" not in result
+        assert result == "[REDACTED:auto]"
+
     def test_normal_text_unchanged(self) -> None:
         text = "This is normal text with no secrets"
         assert redact_env_vars(text) == text
+
+
+class TestRedactStructured:
+    def test_nested_structures_redacted(self) -> None:
+        payload = {
+            "token": "Authorization: Bearer sk-abc12345678901234567890",
+            "nested": [{"password": "hunter2"}],
+        }
+        result = redact_structured(payload, {"db_password": "hunter2"})
+        assert "hunter2" not in str(result)
+        assert "sk-abc12345678901234567890" not in str(result)

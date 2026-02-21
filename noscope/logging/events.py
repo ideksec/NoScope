@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from noscope.tools.redaction import redact_structured
 
 
 def _generate_run_id() -> str:
@@ -56,7 +60,11 @@ class EventLog:
     def __init__(self, run_dir: RunDir) -> None:
         self.run_dir = run_dir
         self._seq = 0
-        self._file = open(run_dir.events_path, "a", encoding="utf-8")  # noqa: SIM115
+        fd = os.open(run_dir.events_path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+        self._file = os.fdopen(fd, "a", encoding="utf-8")
+        # Best effort; some filesystems may not support chmod semantics.
+        with suppress(OSError):
+            os.chmod(run_dir.events_path, 0o600)
 
     def emit(
         self,
@@ -68,17 +76,18 @@ class EventLog:
     ) -> dict[str, Any]:
         """Append an event to the log. Returns the event dict."""
         self._seq += 1
+        safe_summary = _sanitize_value(summary)
         event = {
             "ts": datetime.now(UTC).isoformat(),
             "run_id": self.run_dir.run_id,
             "phase": phase,
             "seq": self._seq,
             "type": event_type,
-            "summary": summary,
-            "data": data or {},
+            "summary": safe_summary,
+            "data": _sanitize_value(data or {}),
         }
         if result is not None:
-            event["result"] = result
+            event["result"] = _sanitize_value(result)
 
         self._file.write(json.dumps(event) + "\n")
         self._file.flush()
@@ -88,3 +97,8 @@ class EventLog:
         """Flush and close the log file."""
         self._file.flush()
         self._file.close()
+
+
+def _sanitize_value(value: Any) -> Any:
+    """Apply automatic secret redaction to event payloads."""
+    return redact_structured(value, {})

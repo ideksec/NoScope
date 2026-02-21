@@ -8,7 +8,7 @@ from typing import Any
 
 from noscope.capabilities import Capability
 from noscope.tools.base import Tool, ToolContext, ToolResult
-from noscope.tools.redaction import redact
+from noscope.tools.redaction import redact_text
 from noscope.tools.safety import check_command_safety
 
 DOCKER_IMAGE = "python:3.12-slim"
@@ -138,8 +138,8 @@ class DockerShellTool(Tool):
         except RuntimeError as e:
             return ToolResult.error(str(e))
 
-        stdout = redact(stdout, context.secrets)
-        stderr = redact(stderr, context.secrets)
+        stdout = redact_text(stdout, context.secrets)
+        stderr = redact_text(stderr, context.secrets)
 
         display = stdout
         if stderr:

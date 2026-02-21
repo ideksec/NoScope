@@ -63,13 +63,12 @@ def check_path_safety(path: str | Path, workspace: Path) -> str | None:
         p = Path(path)
         workspace_resolved = workspace.resolve()
 
-        # Resolve relative to workspace for relative paths, absolute as-is
-        resolved = p.resolve() if p.is_absolute() else (workspace / p).resolve()
+        # Resolve relative to workspace for relative paths, absolute as-is.
+        resolved = p.resolve() if p.is_absolute() else (workspace_resolved / p).resolve()
 
-        if ".." in str(path) and not str(resolved).startswith(str(workspace_resolved)):
-            return "path traversal detected"
-
-        if not str(resolved).startswith(str(workspace_resolved)):
+        if _is_outside_workspace(resolved, workspace_resolved):
+            if ".." in p.parts:
+                return "path traversal detected"
             return "path outside workspace"
 
     except (OSError, ValueError) as e:
@@ -80,10 +79,20 @@ def check_path_safety(path: str | Path, workspace: Path) -> str | None:
 
 def resolve_workspace_path(path: str, workspace: Path) -> Path:
     """Resolve a path relative to the workspace, with safety checks."""
-    resolved = Path(path).resolve() if Path(path).is_absolute() else (workspace / path).resolve()
-
+    p = Path(path)
     workspace_resolved = workspace.resolve()
-    if not str(resolved).startswith(str(workspace_resolved)):
+    resolved = p.resolve() if p.is_absolute() else (workspace_resolved / p).resolve()
+
+    if _is_outside_workspace(resolved, workspace_resolved):
         raise ValueError(f"Path {path} resolves outside workspace: {resolved}")
 
     return resolved
+
+
+def _is_outside_workspace(resolved: Path, workspace: Path) -> bool:
+    """True when resolved path does not live within workspace root."""
+    try:
+        resolved.relative_to(workspace)
+        return False
+    except ValueError:
+        return True

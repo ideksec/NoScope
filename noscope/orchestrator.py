@@ -41,7 +41,7 @@ from noscope.tools.git import (
     GitInitTool,
     GitStatusTool,
 )
-from noscope.tools.shell import ShellTool
+from noscope.tools.shell import ShellTool, build_execution_env
 from noscope.ui.console import ConsoleUI
 
 
@@ -172,7 +172,7 @@ class Orchestrator:
                 capabilities=cap_store,
                 event_log=event_log,
                 deadline=deadline,
-                secrets={},
+                secrets=_runtime_secrets(self.settings),
                 danger_mode=self.settings.danger_mode,
             )
 
@@ -326,15 +326,9 @@ def _detect_launch(workspace: Path) -> tuple[str | None, str]:
 async def _run_server(command: str, workspace: Path) -> None:
     """Start the server and let the user interact with it. Blocks until Ctrl+C."""
     import asyncio
-    import os
     import signal
 
-    env = os.environ.copy()
-    env.pop("VIRTUAL_ENV", None)
-    if "PATH" in env:
-        path_parts = env["PATH"].split(os.pathsep)
-        cleaned = [p for p in path_parts if ".venv" not in p]
-        env["PATH"] = os.pathsep.join(cleaned)
+    env = build_execution_env()
 
     proc = await asyncio.create_subprocess_shell(
         command,
@@ -364,3 +358,13 @@ def _empty_plan() -> PlanOutput:
     from noscope.planning.models import PlanOutput
 
     return PlanOutput()
+
+
+def _runtime_secrets(settings: NoscopeSettings) -> dict[str, str]:
+    """Provide known runtime secrets for output redaction."""
+    secrets: dict[str, str] = {}
+    if settings.anthropic_api_key:
+        secrets["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
+    if settings.openai_api_key:
+        secrets["OPENAI_API_KEY"] = settings.openai_api_key
+    return secrets

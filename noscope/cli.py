@@ -137,11 +137,14 @@ Describe what you want built here.
 '''
     path = Path("spec.md")
     if path.exists():
-        console.print("[yellow]spec.md already exists[/yellow]")
-        raise typer.Exit(1)
+        # Find a unique name
+        for i in range(1, 100):
+            path = Path(f"spec-{i}.md")
+            if not path.exists():
+                break
 
     path.write_text(template, encoding="utf-8")
-    console.print(f"[green]Created {path}[/green] — edit it and run: noscope run --spec spec.md")
+    console.print(f"[green]Created {path}[/green] — edit it and run: noscope run --spec {path}")
 
 
 @app.command()

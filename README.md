@@ -1,4 +1,5 @@
 # NoScope
+<img width="1536" height="1024" alt="NoScope Github Image" src="https://github.com/user-attachments/assets/af16f300-10f0-4bf7-ad1d-abb9c2973a29" />
 
 **Time-boxed autonomous agent orchestration.** Give it a spec and a deadline — it builds a runnable MVP.
 

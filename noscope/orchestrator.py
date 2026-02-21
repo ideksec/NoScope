@@ -20,6 +20,7 @@ from noscope.phases import (
     RequestPhase,
 )
 from noscope.spec.contract import generate_contract
+from noscope.spec.models import SpecInput
 from noscope.spec.parser import parse_spec
 from noscope.tools.base import ToolContext
 from noscope.tools.dispatcher import ToolDispatcher
@@ -50,15 +51,22 @@ class Orchestrator:
 
     async def run(
         self,
-        spec_path: Path,
+        spec_path: Path | None = None,
+        spec_input: SpecInput | None = None,
         timebox: str | None = None,
         output_dir: Path | None = None,
         sandbox: bool = False,
         auto_approve: bool = False,
     ) -> Path:
         """Execute a full NoScope run. Returns the run directory path."""
-        # 1. Parse spec
-        spec = parse_spec(spec_path)
+        # 1. Parse spec — from file or pre-built SpecInput
+        if spec_input is not None:
+            spec = spec_input
+        elif spec_path is not None:
+            spec = parse_spec(spec_path)
+        else:
+            raise ValueError("Either spec_path or spec_input must be provided")
+
         if timebox:
             from noscope.spec.models import _parse_duration
 

@@ -119,8 +119,128 @@ def doctor() -> None:
 
 
 @app.command()
+def new(
+    provider: str = typer.Option(None, "--provider", "-p", help="LLM provider (anthropic|openai)"),
+    model: str = typer.Option(None, "--model", "-m", help="LLM model override"),
+    danger: bool = typer.Option(False, "--danger", help="Enable danger mode"),
+    auto_approve: bool = typer.Option(False, "--yes", "-y", help="Auto-approve all capability requests"),
+) -> None:
+    """Create a new project interactively and start building immediately."""
+    from rich.panel import Panel
+    from rich.prompt import Prompt
+
+    from noscope.config.settings import load_settings
+    from noscope.spec.models import AcceptanceCheck, SpecInput
+    from noscope.ui.console import ConsoleUI
+
+    ui = ConsoleUI(console)
+
+    console.print(Panel("[bold]New Project[/bold]", title="[bold blue]NoScope[/bold blue]", border_style="blue"))
+
+    # 1. Project name
+    name = Prompt.ask("\n  [bold]Project name[/bold]")
+    if not name.strip():
+        console.print("[red]Project name is required[/red]")
+        raise typer.Exit(1)
+
+    # 2. Description (multiline)
+    console.print("\n  [bold]What should it do?[/bold] [dim](enter a blank line to finish)[/dim]")
+    lines: list[str] = []
+    while True:
+        line = Prompt.ask("  ")
+        if not line.strip():
+            break
+        lines.append(line)
+
+    if not lines:
+        console.print("[red]Description is required[/red]")
+        raise typer.Exit(1)
+    body = "\n".join(lines)
+
+    # 3. Timebox
+    timebox = Prompt.ask("\n  [bold]Timebox[/bold]", default="5m")
+
+    # 4. Constraints (optional)
+    constraints_raw = Prompt.ask(
+        "\n  [bold]Constraints[/bold] [dim](comma-separated, or Enter to skip)[/dim]",
+        default="",
+    )
+    constraints = [c.strip() for c in constraints_raw.split(",") if c.strip()] if constraints_raw else []
+
+    # 5. Acceptance checks (optional)
+    acceptance_raw = Prompt.ask(
+        "\n  [bold]Acceptance checks[/bold] [dim](comma-separated, or Enter to skip)[/dim]",
+        default="",
+    )
+    acceptance = (
+        [AcceptanceCheck.from_string(a.strip()) for a in acceptance_raw.split(",") if a.strip()]
+        if acceptance_raw
+        else []
+    )
+
+    # 6. Output directory
+    default_dir = f"./{name.lower().replace(' ', '-')}"
+    output_dir = Prompt.ask("\n  [bold]Output directory[/bold]", default=default_dir)
+
+    # Build SpecInput
+    spec = SpecInput(
+        name=name.strip(),
+        timebox=timebox,
+        constraints=constraints,
+        acceptance=acceptance,
+        body=f"# {name.strip()}\n\n{body}",
+    )
+
+    # Save spec file for reproducibility
+    spec_filename = name.strip().lower().replace(" ", "-") + ".md"
+    spec_content = f"""---
+name: "{spec.name}"
+timebox: "{spec.timebox}"
+constraints:
+{chr(10).join(f'  - "{c}"' for c in constraints) if constraints else '  []'}
+acceptance:
+{chr(10).join(f'  - "{a.raw}"' for a in acceptance) if acceptance else '  []'}
+---
+
+{spec.body}
+"""
+    Path(spec_filename).write_text(spec_content, encoding="utf-8")
+    console.print(f"\n  [dim]Spec saved to {spec_filename}[/dim]")
+
+    # Load settings and run
+    if danger:
+        ui.danger_warning()
+
+    try:
+        settings = load_settings(
+            default_provider=provider,
+            default_model=model,
+            danger_mode=danger,
+        )
+    except ValueError as e:
+        console.print(f"[red]Configuration error:[/red] {e}")
+        raise typer.Exit(1) from None
+
+    ui.header(spec.name, timebox)
+
+    from noscope.orchestrator import Orchestrator
+
+    orchestrator = Orchestrator(settings, console=console)
+    run_dir = asyncio.run(
+        orchestrator.run(
+            spec_input=spec,
+            timebox=timebox,
+            output_dir=Path(output_dir),
+            auto_approve=auto_approve,
+        )
+    )
+
+    ui.complete(run_dir)
+
+
+@app.command()
 def init() -> None:
-    """Create a new spec file template. (stub — coming in v0.2)"""
+    """Create a spec file template."""
     template = '''---
 name: "My Project"
 timebox: "30m"
@@ -137,7 +257,6 @@ Describe what you want built here.
 '''
     path = Path("spec.md")
     if path.exists():
-        # Find a unique name
         for i in range(1, 100):
             path = Path(f"spec-{i}.md")
             if not path.exists():

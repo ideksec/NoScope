@@ -137,7 +137,18 @@ class Supervisor:
             audit_coro = audit.run_continuous()
 
             # Run workers and audit concurrently
-            await asyncio.gather(*worker_coros, audit_coro, return_exceptions=True)
+            results = await asyncio.gather(*worker_coros, audit_coro, return_exceptions=True)
+
+            # Log any worker exceptions (don't let failures go silent)
+            for i, result in enumerate(results):
+                if isinstance(result, BaseException):
+                    label = f"worker-{i}" if i < len(worker_coros) else "audit"
+                    self.event_log.emit(
+                        phase=Phase.BUILD.value,
+                        event_type="agent.error",
+                        summary=f"Agent {label} failed: {result}",
+                        data={"agent": label, "error": str(result), "type": type(result).__name__},
+                    )
 
         # Summary
         completed = sum(1 for t in all_tasks if t.completed)
@@ -156,7 +167,7 @@ class Supervisor:
         remaining: list[PlanTask] = []
 
         for t in tasks:
-            # First task, or tasks with no dependencies, go to setup
+            # First task matching t1, "setup", or "scaffold" in title goes to setup
             if not setup and (
                 t.id == "t1" or "setup" in t.title.lower() or "scaffold" in t.title.lower()
             ):

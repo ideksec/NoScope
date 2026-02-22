@@ -76,6 +76,9 @@ class TestCommandSafety:
     def test_npm_init_with_y_allowed(self) -> None:
         assert check_command_safety("npm init -y") is None
 
+    def test_npm_init_with_yes_allowed(self) -> None:
+        assert check_command_safety("npm init --yes") is None
+
     def test_yarn_create_denied(self) -> None:
         result = check_command_safety("yarn create next-app")
         assert result is not None

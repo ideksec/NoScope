@@ -56,6 +56,7 @@ def _make_tasks() -> list[PlanTask]:
 class TestBuildAgent:
     @pytest.mark.asyncio
     async def test_agent_marks_tasks_complete(self, tool_context: ToolContext) -> None:
+        tasks = [PlanTask(id="t1", title="Test task", kind="edit")]
         provider = FakeProvider(
             [
                 LLMResponse(
@@ -70,22 +71,23 @@ class TestBuildAgent:
         )
 
         from noscope.logging.events import EventLog, RunDir
+        from noscope.tools.dispatcher import ToolDispatcher
 
         run_dir = RunDir(base=tool_context.workspace.parent / "runs")
         event_log = EventLog(run_dir)
+        dispatcher = ToolDispatcher()
 
         agent = BuildAgent(
             agent_id="test",
             provider=provider,
-            dispatcher=tool_context.event_log._file,  # dummy
+            dispatcher=dispatcher,
             context=tool_context,
             event_log=event_log,
             deadline=tool_context.deadline,
         )
 
-        # We can't easily test the full loop without a real dispatcher,
-        # but we can test that the agent class instantiates correctly
-        assert agent.agent_id == "test"
+        result = await agent.run(tasks, "You are a builder.")
+        assert result[0].completed is True
         event_log.close()
 
     @pytest.mark.asyncio

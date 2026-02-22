@@ -16,7 +16,7 @@ from noscope.logging.events import EventLog
 from noscope.planning.models import PlanOutput, PlanTask
 from noscope.planning.planner import plan as generate_plan
 from noscope.spec.models import SpecInput
-from noscope.tools.base import ToolContext
+from noscope.tools.base import ToolContext, tool_summary
 from noscope.tools.dispatcher import ToolDispatcher
 
 if TYPE_CHECKING:
@@ -123,213 +123,6 @@ class RequestPhase:
         console.print(f"    Risk: [{color}]{req.risk}[/{color}]")
 
         return Confirm.ask("    Approve?", default=True)
-
-
-class BuildPhase:
-    """Execute the build plan via an LLM agent loop."""
-
-    async def run(
-        self,
-        plan: PlanOutput,
-        provider: LLMProvider,
-        dispatcher: ToolDispatcher,
-        context: ToolContext,
-        event_log: EventLog,
-        deadline: Deadline,
-        ui: ConsoleUI | None = None,
-        tokens: TokenTracker | None = None,
-    ) -> list[PlanTask]:
-        event_log.emit(
-            phase=Phase.BUILD.value,
-            event_type="phase.start",
-            summary="Starting BUILD phase",
-        )
-        deadline.advance_phase(Phase.BUILD)
-
-        mvp_tasks = [t for t in plan.tasks if t.priority == "mvp"]
-        stretch_tasks = [t for t in plan.tasks if t.priority == "stretch"]
-        all_tasks = mvp_tasks + stretch_tasks
-
-        # Track tasks by ID for completion marking
-        task_map = {t.id: t for t in all_tasks}
-
-        # Build system prompt
-        system = self._build_system_prompt(plan, context.workspace)
-        messages: list[Message] = [Message(role="system", content=system)]
-
-        # Initial user message with the plan
-        task_list = "\n".join(
-            f"- [{t.id}] {t.title} ({t.kind}, {t.priority}): {t.description}" for t in all_tasks
-        )
-        messages.append(
-            Message(
-                role="user",
-                content=f"Execute this build plan. Work through each task in order.\n\n{task_list}\n\nStart with task {all_tasks[0].id if all_tasks else 'none'}.",
-            )
-        )
-
-        tool_schemas = [
-            ToolSchema(name=s["name"], description=s["description"], parameters=s["parameters"])
-            for s in dispatcher.to_schemas()
-        ]
-        # Add mark_task_complete tool for explicit task tracking
-        tool_schemas.append(
-            ToolSchema(
-                name="mark_task_complete",
-                description="Mark a task as completed. Call this after finishing each task.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "task_id": {"type": "string", "description": "The task ID (e.g., t1, t2)"},
-                    },
-                    "required": ["task_id"],
-                },
-            )
-        )
-
-        panic_shown = False
-
-        # Agent loop
-        for _iteration in range(MAX_BUILD_ITERATIONS):
-            if deadline.is_expired():
-                event_log.emit(
-                    phase=Phase.BUILD.value,
-                    event_type="deadline.expired",
-                    summary="Deadline expired during build",
-                )
-                break
-
-            if deadline.is_panic_mode() and not panic_shown:
-                panic_shown = True
-                if ui:
-                    ui.panic_warning()
-                remaining = deadline.format_remaining()
-                messages.append(
-                    Message(
-                        role="user",
-                        content=f"⚠️ PANIC MODE: Only {remaining} remaining. Stop adding features. Focus on making what exists runnable. Skip stretch tasks.",
-                    )
-                )
-
-            if deadline.should_transition(Phase.BUILD):
-                event_log.emit(
-                    phase=Phase.BUILD.value,
-                    event_type="phase.time_exhausted",
-                    summary="BUILD phase time budget exhausted",
-                )
-                break
-
-            # Call LLM
-            response = await provider.complete(messages, tools=tool_schemas)
-            if tokens:
-                tokens.add(response.usage)
-
-            # Add assistant response to conversation
-            messages.append(
-                Message(
-                    role="assistant",
-                    content=response.content,
-                    tool_calls=response.tool_calls,
-                )
-            )
-
-            if response.content:
-                event_log.emit(
-                    phase=Phase.BUILD.value,
-                    event_type="llm.response",
-                    summary=response.content[:200],
-                )
-                if ui:
-                    ui.llm_thinking(response.content[:200], deadline)
-
-            # If no tool calls, the LLM is done (or confused)
-            if not response.tool_calls:
-                if response.stop_reason == "end_turn":
-                    break
-                continue
-
-            # Execute tool calls
-            for tc in response.tool_calls:
-                # Handle the virtual mark_task_complete tool
-                if tc.name == "mark_task_complete":
-                    task_id = tc.arguments.get("task_id", "")
-                    if task_id in task_map:
-                        task_map[task_id].completed = True
-                        event_log.emit(
-                            phase=Phase.BUILD.value,
-                            event_type="task.complete",
-                            summary=f"Task {task_id} completed: {task_map[task_id].title}",
-                            data={"task_id": task_id},
-                        )
-                        if ui:
-                            ui.task_complete(task_id, task_map[task_id].title, deadline)
-                        messages.append(
-                            Message(
-                                role="tool",
-                                content=f"Task {task_id} marked as complete.",
-                                tool_call_id=tc.id,
-                            )
-                        )
-                    else:
-                        messages.append(
-                            Message(
-                                role="tool",
-                                content=f"Unknown task ID: {task_id}",
-                                tool_call_id=tc.id,
-                            )
-                        )
-                    continue
-
-                # Show tool activity in UI
-                tool_summary = _tool_summary(tc.name, tc.arguments)
-                if ui:
-                    ui.tool_activity(tc.name, tool_summary, deadline)
-
-                result = await dispatcher.dispatch(tc.name, tc.arguments, context)
-                messages.append(
-                    Message(
-                        role="tool",
-                        content=result.display or json.dumps(result.data),
-                        tool_call_id=tc.id,
-                    )
-                )
-
-        return all_tasks
-
-    def _build_system_prompt(self, plan: PlanOutput, workspace: Path) -> str:
-        total_tasks = len(plan.tasks)
-        mvp_count = sum(1 for t in plan.tasks if t.priority == "mvp")
-        stretch_count = total_tasks - mvp_count
-
-        return f"""\
-You are an autonomous software builder. You have a fixed time budget and must build a working MVP.
-
-Workspace: {workspace}
-
-NON-NEGOTIABLE: The app MUST RUN at the end. A running demo beats perfect code. If you have to choose between more features and a working app, always choose working.
-
-You have {total_tasks} tasks ({mvp_count} MVP + {stretch_count} stretch). Complete ALL MVP tasks, then tackle stretch tasks if time allows. When time is plentiful, build something impressive — good styling, thoughtful UX, proper error handling. When time is tight, cut corners on polish but never on functionality.
-
-Rules:
-- Write clean, working code — build something you'd be proud to demo
-- After completing each task, call mark_task_complete with the task ID
-- If something fails, fix it or work around it — don't skip it
-- Use "python3 -m pip" instead of bare "pip" for installing packages
-- Use "python3" instead of "python" for running scripts
-- Install dependencies EARLY — don't leave this for the last task
-- Test that the app starts after writing the core files
-- When done with all tasks, say "BUILD COMPLETE" in your response
-
-CRITICAL — DO NOT USE INTERACTIVE SCAFFOLDING TOOLS:
-- NEVER use create-react-app, npm create, npx create-*, yarn create, or similar
-- These commands hang waiting for input and will waste your entire time budget
-- Instead, write package.json and project files MANUALLY — it's faster and more reliable
-- Use "npm init -y" if you need a basic package.json, then edit it
-- Use "npm install" (not "npm create") to install dependencies
-
-MVP definition: {json.dumps(plan.mvp_definition)}
-Exclusions: {json.dumps(plan.exclusions)}
-"""
 
 
 class HardenPhase:
@@ -519,7 +312,7 @@ RESPOND WITH EXACTLY ONE OF:
 
             for tc in response.tool_calls:
                 if ui:
-                    ui.tool_activity(tc.name, _tool_summary(tc.name, tc.arguments), deadline)
+                    ui.tool_activity(tc.name, tool_summary(tc.name, tc.arguments), deadline)
                 result = await dispatcher.dispatch(tc.name, tc.arguments, context)
                 messages.append(
                     Message(
@@ -708,21 +501,3 @@ Write the report with these sections:
         lines.append("- Address incomplete tasks")
 
         return "\n".join(lines)
-
-
-def _tool_summary(name: str, args: dict[str, Any]) -> str:
-    """Create a brief human-readable summary of a tool call."""
-    if name == "write_file":
-        return f"writing {args.get('path', '?')}"
-    if name == "read_file":
-        return f"reading {args.get('path', '?')}"
-    if name == "exec_command":
-        cmd = args.get("command", "")
-        return str(cmd[:80]) if len(cmd) <= 80 else str(cmd[:77]) + "..."
-    if name == "list_directory":
-        return f"listing {args.get('path', '.')}"
-    if name == "create_directory":
-        return f"creating {args.get('path', '?')}"
-    if name in ("git_init", "git_status", "git_add", "git_commit", "git_diff"):
-        return name.replace("_", " ")
-    return name

@@ -41,7 +41,7 @@ INTERACTIVE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
         "interactive scaffolding (npm create). Write project files manually instead",
     ),
     (
-        re.compile(r"\bnpm\s+init\b(?!.*\s-[yY]\b)"),
+        re.compile(r"\bnpm\s+init\b(?!.*(?:\s-[yY]\b|\s--yes\b))"),
         "interactive npm init. Use 'npm init -y' for non-interactive, or write package.json manually",
     ),
     (

@@ -10,7 +10,7 @@ from noscope.deadline import Deadline, Phase
 from noscope.llm.base import LLMProvider, Message, ToolCall, ToolSchema
 from noscope.logging.events import EventLog
 from noscope.planning.models import PlanTask
-from noscope.tools.base import ToolContext
+from noscope.tools.base import ToolContext, tool_summary
 from noscope.tools.dispatcher import ToolDispatcher
 
 if TYPE_CHECKING:
@@ -208,7 +208,7 @@ class BuildAgent:
         # Execute shell commands sequentially (they may depend on each other)
         for tc in shell_calls:
             if self.ui:
-                self.ui.tool_activity(tc.name, _tool_summary(tc.name, tc.arguments), self.deadline)
+                self.ui.tool_activity(tc.name, tool_summary(tc.name, tc.arguments), self.deadline)
             result = await self.dispatcher.dispatch(tc.name, tc.arguments, self.context)
             results.append(
                 Message(
@@ -223,7 +223,7 @@ class BuildAgent:
     async def _dispatch_and_wrap(self, tc: ToolCall) -> Message:
         """Dispatch a tool call and wrap the result as a Message."""
         if self.ui:
-            self.ui.tool_activity(tc.name, _tool_summary(tc.name, tc.arguments), self.deadline)
+            self.ui.tool_activity(tc.name, tool_summary(tc.name, tc.arguments), self.deadline)
         result = await self.dispatcher.dispatch(tc.name, tc.arguments, self.context)
         return Message(
             role="tool",
@@ -318,21 +318,3 @@ class AuditAgent:
             self.ui.tool_activity("audit", "checks passed", self.deadline)
 
         return findings
-
-
-def _tool_summary(name: str, args: dict[str, Any]) -> str:
-    """Create a brief human-readable summary of a tool call."""
-    if name == "write_file":
-        return f"writing {args.get('path', '?')}"
-    if name == "read_file":
-        return f"reading {args.get('path', '?')}"
-    if name == "exec_command":
-        cmd = args.get("command", "")
-        return str(cmd[:80]) if len(cmd) <= 80 else str(cmd[:77]) + "..."
-    if name == "list_directory":
-        return f"listing {args.get('path', '.')}"
-    if name == "create_directory":
-        return f"creating {args.get('path', '?')}"
-    if name in ("git_init", "git_status", "git_add", "git_commit", "git_diff"):
-        return name.replace("_", " ")
-    return name

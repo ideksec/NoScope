@@ -57,3 +57,21 @@ class Tool(ABC):
     async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         """Execute the tool with given arguments."""
         ...
+
+
+def tool_summary(name: str, args: dict[str, Any]) -> str:
+    """Create a brief human-readable summary of a tool call."""
+    if name == "write_file":
+        return f"writing {args.get('path', '?')}"
+    if name == "read_file":
+        return f"reading {args.get('path', '?')}"
+    if name == "exec_command":
+        cmd = args.get("command", "")
+        return str(cmd[:80]) if len(cmd) <= 80 else str(cmd[:77]) + "..."
+    if name == "list_directory":
+        return f"listing {args.get('path', '.')}"
+    if name == "create_directory":
+        return f"creating {args.get('path', '?')}"
+    if name in ("git_init", "git_status", "git_add", "git_commit", "git_diff"):
+        return name.replace("_", " ")
+    return name

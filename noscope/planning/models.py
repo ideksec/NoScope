@@ -18,6 +18,7 @@ class PlanTask(BaseModel):
     priority: Literal["mvp", "stretch"] = "mvp"
     description: str = ""
     completed: bool = False
+    depends_on: list[str] = []
 
 
 class AcceptancePlan(BaseModel):

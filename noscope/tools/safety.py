@@ -30,6 +30,26 @@ DENY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     ),
 ]
 
+# Interactive commands that hang waiting for stdin — blocked with helpful message.
+INTERACTIVE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (
+        re.compile(r"\bnpx\s+create-"),
+        "interactive scaffolding (npx create-*). Write project files manually instead",
+    ),
+    (
+        re.compile(r"\bnpm\s+create\b"),
+        "interactive scaffolding (npm create). Write project files manually instead",
+    ),
+    (
+        re.compile(r"\bnpm\s+init\b(?!.*(?:\s-[yY]\b|\s--yes\b))"),
+        "interactive npm init. Use 'npm init -y' for non-interactive, or write package.json manually",
+    ),
+    (
+        re.compile(r"\byarn\s+create\b"),
+        "interactive scaffolding (yarn create). Write project files manually instead",
+    ),
+]
+
 
 def check_command_safety(command: str, danger_mode: bool = False) -> str | None:
     """Check if a command matches deny patterns.
@@ -41,6 +61,11 @@ def check_command_safety(command: str, danger_mode: bool = False) -> str | None:
         return None
 
     for pattern, reason in DENY_PATTERNS:
+        if pattern.search(command):
+            return reason
+
+    # Block interactive commands that hang waiting for stdin
+    for pattern, reason in INTERACTIVE_PATTERNS:
         if pattern.search(command):
             return reason
 

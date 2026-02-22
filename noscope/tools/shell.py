@@ -85,7 +85,11 @@ class ShellTool(Tool):
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         command = args["command"]
-        timeout = min(args.get("timeout", 60), 300)  # Cap at 5 minutes
+        # Cap timeout: hard max 300s, and never more than 15% of remaining build time
+        hard_cap = 300
+        remaining = context.deadline.remaining()
+        dynamic_cap = max(30, int(remaining * 0.15))  # At least 30s, at most 15% of remaining
+        timeout = min(args.get("timeout", 60), hard_cap, dynamic_cap)
 
         # Safety check
         denial = check_command_safety(command, danger_mode=context.danger_mode)

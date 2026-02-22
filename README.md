@@ -1,7 +1,6 @@
 # NoScope
 
 [![CI](https://github.com/ideksec/NoScope/actions/workflows/ci.yml/badge.svg)](https://github.com/ideksec/NoScope/actions/workflows/ci.yml)
-[![PyPI version](https://img.shields.io/pypi/v/noscope.svg)](https://pypi.org/project/noscope/)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
@@ -46,16 +45,16 @@ NoScope takes a written specification, a fixed time limit, and explicit capabili
 ### Installation
 
 ```bash
-pip install noscope
+git clone https://github.com/ideksec/NoScope.git
+cd NoScope
+uv sync --all-extras
 ```
 
-Or with [uv](https://docs.astral.sh/uv/):
-
-```bash
-uv pip install noscope
-```
+> **Note:** NoScope requires [uv](https://docs.astral.sh/uv/) and Python 3.12+.
 
 ### Set your API key
+
+Create a `.env` file in the project root, or export directly:
 
 ```bash
 export NOSCOPE_ANTHROPIC_API_KEY="your-key-here"
@@ -66,19 +65,19 @@ export NOSCOPE_OPENAI_API_KEY="your-key-here"
 ### Verify your setup
 
 ```bash
-noscope doctor
+uv run noscope doctor
 ```
 
 ### Run your first build
 
 ```bash
-noscope run --spec examples/hello-flask.md --time 5m --dir /tmp/my-app
+uv run noscope run --spec examples/hello-flask.md --time 5m --dir /tmp/my-app
 ```
 
 Or create a project interactively:
 
 ```bash
-noscope new
+uv run noscope new
 ```
 
 ---
@@ -137,13 +136,13 @@ See the [`examples/`](examples/) directory for more spec templates.
 ## CLI Reference
 
 ```
-noscope run --spec <path> --time <duration> --dir <output>
+uv run noscope run --spec <path> --time <duration> --dir <output>
     [--provider anthropic|openai] [--model <model>]
     [--sandbox] [--danger] [--yes] [--tui]
 
-noscope new             # Create and run a project interactively
-noscope doctor          # Check environment and API keys
-noscope init            # Create a spec file template
+uv run noscope new             # Create and run a project interactively
+uv run noscope doctor          # Check environment and API keys
+uv run noscope init            # Create a spec file template
 ```
 
 | Flag | Description |

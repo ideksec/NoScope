@@ -12,6 +12,8 @@ from noscope.tools.redaction import redact_text
 from noscope.tools.safety import check_command_safety
 
 DOCKER_IMAGE = "python:3.12-slim"
+DOCKER_MEMORY_LIMIT = "512m"
+DOCKER_CPU_LIMIT = "1.0"
 
 
 class DockerSandbox:
@@ -36,6 +38,14 @@ class DockerSandbox:
             f"{self.workspace}:/workspace",
             "-w",
             "/workspace",
+            "--memory",
+            DOCKER_MEMORY_LIMIT,
+            "--cpus",
+            DOCKER_CPU_LIMIT,
+            "--security-opt",
+            "no-new-privileges",
+            "--network",
+            "bridge",
             self.image,
             "sleep",
             "infinity",
@@ -68,9 +78,7 @@ class DockerSandbox:
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
-            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except TimeoutError:
             # Kill the exec, not the container
             return 124, "", f"Command timed out after {timeout}s"

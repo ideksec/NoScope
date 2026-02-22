@@ -465,10 +465,10 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
-    { name = "httpx" },
     { name = "openai" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "python-dotenv" },
     { name = "python-frontmatter" },
     { name = "pyyaml" },
     { name = "rich" },
@@ -490,7 +490,6 @@ tui = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic" },
-    { name = "httpx" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "openai" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -498,6 +497,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-asyncio", marker = "extra == 'dev'" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
+    { name = "python-dotenv" },
     { name = "python-frontmatter" },
     { name = "pyyaml" },
     { name = "rich" },

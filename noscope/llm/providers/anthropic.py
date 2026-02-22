@@ -124,24 +124,28 @@ def _split_messages(messages: list[Message]) -> tuple[str, list[dict[str, Any]]]
                 content.append({"type": "text", "text": msg.content})
             if msg.tool_calls:
                 for tc in msg.tool_calls:
-                    content.append({
-                        "type": "tool_use",
-                        "id": tc.id,
-                        "name": tc.name,
-                        "input": tc.arguments,
-                    })
+                    content.append(
+                        {
+                            "type": "tool_use",
+                            "id": tc.id,
+                            "name": tc.name,
+                            "input": tc.arguments,
+                        }
+                    )
             api_messages.append({"role": "assistant", "content": content or msg.content})
         elif msg.role == "tool":
-            api_messages.append({
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": msg.tool_call_id,
-                        "content": msg.content,
-                    }
-                ],
-            })
+            api_messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": msg.tool_call_id,
+                            "content": msg.content,
+                        }
+                    ],
+                }
+            )
         else:
             api_messages.append({"role": msg.role, "content": msg.content})
 

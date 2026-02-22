@@ -50,7 +50,9 @@ Respond ONLY with the JSON object, no markdown fences or explanation.
 """
 
 
-async def plan(spec: SpecInput, provider: LLMProvider, tokens: TokenTracker | None = None) -> PlanOutput:
+async def plan(
+    spec: SpecInput, provider: LLMProvider, tokens: TokenTracker | None = None
+) -> PlanOutput:
     """Generate a build plan from a spec using an LLM."""
     user_content = f"""Project: {spec.name}
 Timebox: {spec.timebox} ({spec.timebox_seconds}s)
@@ -95,4 +97,6 @@ Spec body:
                     )
                 )
 
-    raise ValueError(f"Failed to generate valid plan after {max_retries + 1} attempts: {last_error}")
+    raise ValueError(
+        f"Failed to generate valid plan after {max_retries + 1} attempts: {last_error}"
+    )

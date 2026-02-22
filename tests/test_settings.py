@@ -20,7 +20,10 @@ _CLEAR_KEYS = {
 
 class TestSettings:
     def test_requires_api_key(self) -> None:
-        with patch.dict(os.environ, _CLEAR_KEYS, clear=False), pytest.raises(ValueError, match="API key"):
+        with (
+            patch.dict(os.environ, _CLEAR_KEYS, clear=False),
+            pytest.raises(ValueError, match="API key"),
+        ):
             NoscopeSettings(_env_file=None)  # type: ignore[call-arg]
 
     def test_anthropic_key_only(self) -> None:

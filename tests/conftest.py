@@ -70,7 +70,7 @@ def sample_spec_path(tmp_path: Path) -> Path:
     """Create a sample spec file."""
     spec = tmp_path / "spec.md"
     spec.write_text(
-        '''---
+        """---
 name: "Test Project"
 timebox: "5m"
 constraints:
@@ -83,7 +83,7 @@ acceptance:
 # Test Project
 
 Build a simple test project.
-''',
+""",
         encoding="utf-8",
     )
     return spec

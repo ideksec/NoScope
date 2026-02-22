@@ -9,9 +9,7 @@ from noscope.capabilities import Capability
 from noscope.tools.base import Tool, ToolContext, ToolResult
 
 
-async def _run_git(
-    args: list[str], cwd: str, timeout: int = 30
-) -> tuple[int, str, str]:
+async def _run_git(args: list[str], cwd: str, timeout: int = 30) -> tuple[int, str, str]:
     """Run a git command and return (exit_code, stdout, stderr)."""
     proc = await asyncio.create_subprocess_exec(
         "git",

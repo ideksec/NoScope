@@ -54,12 +54,13 @@ make typecheck
 - Use the GitHub issue templates for bugs and feature requests
 - Include reproduction steps for bugs
 - Example specs that don't work well are especially valuable
+- For security vulnerabilities, see [SECURITY.md](.github/SECURITY.md)
 
 ## Architecture Overview
 
 - `noscope/cli.py` — Typer CLI entry point
 - `noscope/orchestrator.py` — Main execution loop
-- `noscope/phases.py` — Phase implementations (PLAN/BUILD/HARDEN/HANDOFF)
+- `noscope/phases.py` — Phase implementations (PLAN/BUILD/HARDEN/VERIFY/HANDOFF)
 - `noscope/deadline.py` — Timebox engine
 - `noscope/tools/` — Agent tools (filesystem, shell, git)
 - `noscope/llm/` — LLM provider abstraction

@@ -57,9 +57,7 @@ class OpenAIProvider:
                     arguments = json.loads(tc.function.arguments)
                 except json.JSONDecodeError:
                     arguments = {}
-                tool_calls.append(
-                    ToolCall(id=tc.id, name=tc.function.name, arguments=arguments)
-                )
+                tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=arguments))
 
         usage = Usage()
         if response.usage:
@@ -129,17 +127,21 @@ def _convert_messages(messages: list[Message]) -> list[dict[str, Any]]:
                 }
                 for tc in msg.tool_calls
             ]
-            api_messages.append({
-                "role": "assistant",
-                "content": msg.content or None,
-                "tool_calls": tool_calls_api,
-            })
+            api_messages.append(
+                {
+                    "role": "assistant",
+                    "content": msg.content or None,
+                    "tool_calls": tool_calls_api,
+                }
+            )
         elif msg.role == "tool":
-            api_messages.append({
-                "role": "tool",
-                "content": msg.content,
-                "tool_call_id": msg.tool_call_id or "",
-            })
+            api_messages.append(
+                {
+                    "role": "tool",
+                    "content": msg.content,
+                    "tool_call_id": msg.tool_call_id or "",
+                }
+            )
         else:
             api_messages.append({"role": msg.role, "content": msg.content})
 

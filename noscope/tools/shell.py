@@ -37,6 +37,8 @@ _SENSITIVE_ENV_KEY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+MAX_OUTPUT_LENGTH = 50_000
+
 
 def build_execution_env(base_env: Mapping[str, str] | None = None) -> dict[str, str]:
     """Build an execution environment with sensitive values stripped."""
@@ -108,9 +110,7 @@ class ShellTool(Tool):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
-            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except TimeoutError:
             proc.kill()
             return ToolResult.error(f"Command timed out after {timeout}s")
@@ -122,11 +122,10 @@ class ShellTool(Tool):
         exit_code = proc.returncode or 0
 
         # Truncate very long output
-        max_len = 50_000
-        if len(stdout) > max_len:
-            stdout = stdout[:max_len] + "\n... (truncated)"
-        if len(stderr) > max_len:
-            stderr = stderr[:max_len] + "\n... (truncated)"
+        if len(stdout) > MAX_OUTPUT_LENGTH:
+            stdout = stdout[:MAX_OUTPUT_LENGTH] + "\n... (truncated)"
+        if len(stderr) > MAX_OUTPUT_LENGTH:
+            stderr = stderr[:MAX_OUTPUT_LENGTH] + "\n... (truncated)"
 
         display = stdout
         if stderr:

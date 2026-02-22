@@ -5,37 +5,30 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-DENY_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?/\s*$"),  # rm -rf /
-    re.compile(r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+/\s*$"),  # rm -rf /
-    re.compile(r"\bsudo\b"),
-    re.compile(r"\bchmod\s+777\b"),
-    re.compile(r"\bmkfs\b"),
-    re.compile(r"\bdd\s+.*of=/dev/"),
-    re.compile(r"\b:(){ :\|:& };:"),  # fork bomb
-    re.compile(r"\bcurl\s+.*\|\s*(?:bash|sh|zsh)\b"),  # pipe to shell
-    re.compile(r"\bwget\s+.*\|\s*(?:bash|sh|zsh)\b"),
-    re.compile(r"xmrig|cryptominer|minerd|stratum\+tcp"),  # crypto mining
-    re.compile(r"\beval\b.*\$\("),  # eval with command substitution
-    re.compile(r">\s*/dev/sd[a-z]"),  # write to raw disk
-    re.compile(r"\bnc\s+-[a-zA-Z]*l"),  # netcat listener (reverse shell)
+DENY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?/\s*$"), "destructive filesystem operation"),
+    (
+        re.compile(r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+/\s*$"),
+        "destructive filesystem operation",
+    ),
+    (re.compile(r"(?:^|/|\b)sudo\b"), "privilege escalation"),
+    (re.compile(r"\bchmod\s+0?777\b"), "overly permissive file permissions"),
+    (re.compile(r"\bmkfs\b"), "filesystem destruction"),
+    (re.compile(r"\bdd\s+.*of=/dev/"), "raw disk write"),
+    (re.compile(r"\b:(){ :\|:& };:"), "fork bomb"),
+    (re.compile(r"\bcurl\s+.*\|\s*(?:bash|sh|zsh|dash)\b"), "piping remote content to shell"),
+    (re.compile(r"\bwget\s+.*\|\s*(?:bash|sh|zsh|dash)\b"), "piping remote content to shell"),
+    (re.compile(r"\bbase64\b.*\|\s*(?:bash|sh|zsh|dash)\b"), "piping decoded content to shell"),
+    (re.compile(r"xmrig|cryptominer|minerd|stratum\+tcp"), "crypto mining"),
+    (re.compile(r"\beval\b.*\$\("), "dangerous eval"),
+    (re.compile(r">\s*/dev/sd[a-z]"), "raw disk write"),
+    (re.compile(r"\bnc\s+-[a-zA-Z]*l"), "potential reverse shell"),
+    (re.compile(r"\bdocker\s+.*--privileged\b"), "privileged container"),
+    (
+        re.compile(r"\bpython3?\s+-c\s+['\"].*\b(?:os\.system|subprocess|exec)\b"),
+        "code execution evasion",
+    ),
 ]
-
-DENY_REASONS: dict[int, str] = {
-    0: "destructive filesystem operation",
-    1: "destructive filesystem operation",
-    2: "privilege escalation",
-    3: "overly permissive file permissions",
-    4: "filesystem destruction",
-    5: "raw disk write",
-    6: "fork bomb",
-    7: "piping remote content to shell",
-    8: "piping remote content to shell",
-    9: "crypto mining",
-    10: "dangerous eval",
-    11: "raw disk write",
-    12: "potential reverse shell",
-}
 
 
 def check_command_safety(command: str, danger_mode: bool = False) -> str | None:
@@ -47,9 +40,9 @@ def check_command_safety(command: str, danger_mode: bool = False) -> str | None:
     if danger_mode:
         return None
 
-    for i, pattern in enumerate(DENY_PATTERNS):
+    for pattern, reason in DENY_PATTERNS:
         if pattern.search(command):
-            return DENY_REASONS.get(i, "denied by safety filter")
+            return reason
 
     return None
 

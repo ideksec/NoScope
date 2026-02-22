@@ -24,9 +24,7 @@ class TestShellTool:
 
     async def test_timeout(self, tool_context: ToolContext) -> None:
         tool = ShellTool()
-        result = await tool.execute(
-            {"command": "sleep 10", "timeout": 1}, tool_context
-        )
+        result = await tool.execute({"command": "sleep 10", "timeout": 1}, tool_context)
         assert result.status == "error"
         assert "timed out" in result.display.lower()
 
@@ -40,9 +38,7 @@ class TestShellTool:
         subdir = tool_context.workspace / "subdir"
         subdir.mkdir()
         tool = ShellTool()
-        result = await tool.execute(
-            {"command": "pwd", "cwd": "subdir"}, tool_context
-        )
+        result = await tool.execute({"command": "pwd", "cwd": "subdir"}, tool_context)
         assert result.status == "ok"
         assert "subdir" in result.display
 
@@ -58,9 +54,7 @@ class TestShellTool:
     async def test_secret_redaction(self, tool_context: ToolContext) -> None:
         tool_context.secrets = {"MY_SECRET": "supersecret123"}
         tool = ShellTool()
-        result = await tool.execute(
-            {"command": "echo supersecret123"}, tool_context
-        )
+        result = await tool.execute({"command": "echo supersecret123"}, tool_context)
         assert "supersecret123" not in result.display
         assert "[REDACTED:MY_SECRET]" in result.display
 

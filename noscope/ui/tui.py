@@ -101,6 +101,4 @@ if HAS_TEXTUAL:
             self.phase = phase
             self.remaining = remaining
             header = self.query_one("#header-bar", Static)
-            header.update(
-                f"[bold]{self.project_name}[/bold] | Phase: {phase} | ⏱ {remaining}"
-            )
+            header.update(f"[bold]{self.project_name}[/bold] | Phase: {phase} | ⏱ {remaining}")

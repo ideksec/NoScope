@@ -15,9 +15,7 @@ class TestMessageModel:
         msg = Message(
             role="assistant",
             content="Let me do that.",
-            tool_calls=[
-                ToolCall(id="tc1", name="read_file", arguments={"path": "test.txt"})
-            ],
+            tool_calls=[ToolCall(id="tc1", name="read_file", arguments={"path": "test.txt"})],
         )
         assert len(msg.tool_calls) == 1
         assert msg.tool_calls[0].name == "read_file"

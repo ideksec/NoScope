@@ -38,17 +38,13 @@ class TestReadFileTool:
 class TestWriteFileTool:
     async def test_write_new(self, tool_context: ToolContext) -> None:
         tool = WriteFileTool()
-        result = await tool.execute(
-            {"path": "new.txt", "content": "hello"}, tool_context
-        )
+        result = await tool.execute({"path": "new.txt", "content": "hello"}, tool_context)
         assert result.status == "ok"
         assert (tool_context.workspace / "new.txt").read_text() == "hello"
 
     async def test_write_creates_parents(self, tool_context: ToolContext) -> None:
         tool = WriteFileTool()
-        result = await tool.execute(
-            {"path": "a/b/c.txt", "content": "nested"}, tool_context
-        )
+        result = await tool.execute({"path": "a/b/c.txt", "content": "nested"}, tool_context)
         assert result.status == "ok"
         assert (tool_context.workspace / "a/b/c.txt").read_text() == "nested"
 

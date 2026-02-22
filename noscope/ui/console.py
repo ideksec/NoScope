@@ -25,8 +25,7 @@ class ConsoleUI:
     def header(self, spec_name: str, timebox: str) -> None:
         self.console.print(
             Panel(
-                f"[bold white]{spec_name}[/bold white]\n"
-                f"Timebox: [cyan]{timebox}[/cyan]",
+                f"[bold white]{spec_name}[/bold white]\nTimebox: [cyan]{timebox}[/cyan]",
                 title=f"[bold blue]NoScope[/bold blue] v{__version__}",
                 border_style="blue",
             )
@@ -70,9 +69,7 @@ class ConsoleUI:
         remaining = deadline.format_remaining()
         if len(summary) > 100:
             summary = summary[:97] + "..."
-        self.console.print(
-            f"  [dim]💭 {summary}[/dim] [dim]({remaining})[/dim]"
-        )
+        self.console.print(f"  [dim]💭 {summary}[/dim] [dim]({remaining})[/dim]")
 
     def capability_table(self, requests: list[CapabilityRequest]) -> None:
         table = Table(title="Capability Requests", show_header=True, header_style="bold")
@@ -142,7 +139,9 @@ class ConsoleUI:
                 )
             )
 
-    def cost_summary(self, input_tokens: int, output_tokens: int, provider: str, model: str) -> None:
+    def cost_summary(
+        self, input_tokens: int, output_tokens: int, provider: str, model: str
+    ) -> None:
         """Show estimated cost of the run."""
         # Pricing per million tokens (approximate, as of 2025)
         pricing: dict[str, tuple[float, float]] = {
@@ -232,9 +231,7 @@ class ConsoleUI:
         }
         input_price, output_price = pricing.get(model, (3.0, 15.0))
         cost = (input_tokens / 1_000_000 * input_price) + (output_tokens / 1_000_000 * output_price)
-        lines.append(
-            f"  Cost:        ${cost:.4f} ({input_tokens:,} in / {output_tokens:,} out)"
-        )
+        lines.append(f"  Cost:        ${cost:.4f} ({input_tokens:,} in / {output_tokens:,} out)")
 
         self.console.print(
             Panel(

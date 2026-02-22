@@ -11,6 +11,7 @@ class Phase(StrEnum):
     REQUEST = "REQUEST"
     BUILD = "BUILD"
     HARDEN = "HARDEN"
+    VERIFY = "VERIFY"
     HANDOFF = "HANDOFF"
 
 
@@ -19,12 +20,20 @@ DEFAULT_ALLOCATION: dict[Phase, float] = {
     Phase.PLAN: 0.10,
     Phase.REQUEST: 0.00,  # REQUEST is interactive, effectively zero budget
     Phase.BUILD: 0.50,
-    Phase.HARDEN: 0.35,  # Includes verification — must have time to get MVP running
+    Phase.HARDEN: 0.25,
+    Phase.VERIFY: 0.10,
     Phase.HANDOFF: 0.05,
 }
 
 # Phase ordering for transitions
-PHASE_ORDER: list[Phase] = [Phase.PLAN, Phase.REQUEST, Phase.BUILD, Phase.HARDEN, Phase.HANDOFF]
+PHASE_ORDER: list[Phase] = [
+    Phase.PLAN,
+    Phase.REQUEST,
+    Phase.BUILD,
+    Phase.HARDEN,
+    Phase.VERIFY,
+    Phase.HANDOFF,
+]
 
 
 class Deadline:

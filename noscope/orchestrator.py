@@ -112,27 +112,35 @@ class Orchestrator:
 
         # Set up tools
         dispatcher = ToolDispatcher()
-        dispatcher.register_all([
-            ReadFileTool(),
-            WriteFileTool(),
-            ListDirectoryTool(),
-            CreateDirectoryTool(),
-            ShellTool(),
-            GitInitTool(),
-            GitStatusTool(),
-            GitAddTool(),
-            GitCommitTool(),
-            GitDiffTool(),
-        ])
+        dispatcher.register_all(
+            [
+                ReadFileTool(),
+                WriteFileTool(),
+                ListDirectoryTool(),
+                CreateDirectoryTool(),
+                ShellTool(),
+                GitInitTool(),
+                GitStatusTool(),
+                GitAddTool(),
+                GitCommitTool(),
+                GitDiffTool(),
+            ]
+        )
 
         tasks: list[Any] = []
         acceptance_results: list[dict[str, Any]] = []
+        plan_output: PlanOutput | None = None
+        verify_data: tuple[bool, str] | None = None
 
         try:
             # 5. PLAN phase
-            self.ui.phase_banner(Phase.PLAN, "Generating build plan...", deadline.format_remaining())
+            self.ui.phase_banner(
+                Phase.PLAN, "Generating build plan...", deadline.format_remaining()
+            )
             plan_phase = PlanPhase()
-            plan_output = await plan_phase.run(spec, self.provider, event_log, deadline, tokens=tokens)
+            plan_output = await plan_phase.run(
+                spec, self.provider, event_log, deadline, tokens=tokens
+            )
             self.ui.console.print(
                 f"  Plan: [cyan]{len(plan_output.tasks)}[/cyan] tasks, "
                 f"[cyan]{len(plan_output.requested_capabilities)}[/cyan] capabilities requested"
@@ -178,31 +186,49 @@ class Orchestrator:
 
             build_phase = BuildPhase()
             tasks = await build_phase.run(
-                plan_output, self.provider, dispatcher, tool_context,
-                event_log, deadline, ui=self.ui, tokens=tokens,
+                plan_output,
+                self.provider,
+                dispatcher,
+                tool_context,
+                event_log,
+                deadline,
+                ui=self.ui,
+                tokens=tokens,
             )
             completed = sum(1 for t in tasks if t.completed)
-            self.ui.console.print(
-                f"  Completed [cyan]{completed}/{len(tasks)}[/cyan] tasks"
-            )
+            self.ui.console.print(f"  Completed [cyan]{completed}/{len(tasks)}[/cyan] tasks")
 
             # 9. HARDEN phase
-            self.ui.phase_banner(Phase.HARDEN, "Running acceptance checks...", deadline.format_remaining())
+            self.ui.phase_banner(
+                Phase.HARDEN, "Running acceptance checks...", deadline.format_remaining()
+            )
             harden_phase = HardenPhase()
             acceptance_results = await harden_phase.run(
-                plan_output, spec, dispatcher, tool_context,
-                event_log, deadline, ui=self.ui,
+                plan_output,
+                spec,
+                dispatcher,
+                tool_context,
+                event_log,
+                deadline,
+                ui=self.ui,
             )
             self.ui.acceptance_results(acceptance_results)
 
             # 10. VERIFY phase — confirm MVP actually runs
-            verify_data: tuple[bool, str] | None = None
             if not deadline.is_expired():
-                self.ui.phase_banner(Phase.HARDEN, "Verifying MVP runs...", deadline.format_remaining())
+                self.ui.phase_banner(
+                    Phase.VERIFY, "Verifying MVP runs...", deadline.format_remaining()
+                )
                 verify_phase = VerifyPhase()
                 verified, verify_msg = await verify_phase.run(
-                    spec, self.provider, dispatcher, tool_context,
-                    event_log, deadline, ui=self.ui, tokens=tokens,
+                    spec,
+                    self.provider,
+                    dispatcher,
+                    tool_context,
+                    event_log,
+                    deadline,
+                    ui=self.ui,
+                    tokens=tokens,
                 )
                 verify_data = (verified, verify_msg)
                 self.ui.verify_result(verified, verify_msg)
@@ -215,18 +241,16 @@ class Orchestrator:
                 data={"error": str(e), "type": type(e).__name__},
             )
             self.ui.console.print(f"\n[red]Error:[/red] {e}")
-            if not tasks:
-                tasks = plan_output.tasks if "plan_output" in locals() else []
-            verify_data = None
+            if not tasks and plan_output is not None:
+                tasks = plan_output.tasks
 
         # 11. HANDOFF phase (ALWAYS runs)
         self.ui.phase_banner(Phase.HANDOFF, "Generating report...", deadline.format_remaining())
         handoff_phase = HandoffPhase()
         try:
-            plan_for_handoff = plan_output if "plan_output" in locals() else None
             await handoff_phase.run(
                 spec,
-                plan_for_handoff or _empty_plan(),
+                plan_output or _empty_plan(),
                 tasks,
                 acceptance_results,
                 self.provider,
@@ -235,9 +259,15 @@ class Orchestrator:
                 run_dir.handoff_path,
                 tokens=tokens,
                 workspace=workspace,
-                verify_result=verify_data if "verify_data" in locals() else None,
+                verify_result=verify_data,
             )
         except Exception as e:
+            event_log.emit(
+                phase="HANDOFF",
+                event_type="handoff.error",
+                summary=f"Handoff report generation failed: {e}",
+                data={"error": str(e), "type": type(e).__name__},
+            )
             run_dir.handoff_path.write_text(
                 f"# Handoff Report: {spec.name}\n\nRun failed with error: {e}\n",
                 encoding="utf-8",
@@ -256,8 +286,8 @@ class Orchestrator:
         event_log.close()
 
         # Detect launch info
-        verified_ok = verify_data[0] if "verify_data" in locals() and verify_data else None
-        verify_msg = verify_data[1] if "verify_data" in locals() and verify_data else ""
+        verified_ok = verify_data[0] if verify_data else None
+        verify_msg = verify_data[1] if verify_data else ""
         launch_cmd, launch_url = _detect_launch(workspace)
 
         completed_count = sum(1 for t in tasks if t.completed) if tasks else 0

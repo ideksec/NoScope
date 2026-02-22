@@ -37,11 +37,17 @@ class ToolDispatcher:
 
         # Check capability
         if not context.capabilities.check(tool.required_capability):
+            context.event_log.emit(
+                phase=context.deadline.current_phase.value,
+                event_type=f"tool.{tool_name}.denied",
+                summary=f"Capability denied: {tool.required_capability.value} for {tool_name}",
+                data={"tool": tool_name, "capability": tool.required_capability.value},
+            )
             return ToolResult.error(
                 f"Capability '{tool.required_capability.value}' not granted for tool '{tool_name}'"
             )
 
-        # Log the call
+        # Log the call (with secrets redacted and bulky fields trimmed)
         context.event_log.emit(
             phase=context.deadline.current_phase.value,
             event_type=f"tool.{tool_name}",
@@ -52,7 +58,7 @@ class ToolDispatcher:
         # Execute
         result = await tool.execute(args, context)
 
-        # Log the result
+        # Log the result (with secrets redacted and bulky fields trimmed)
         context.event_log.emit(
             phase=context.deadline.current_phase.value,
             event_type=f"tool.{tool_name}.result",
@@ -70,11 +76,13 @@ class ToolDispatcher:
         """Convert all registered tools to LLM function/tool schemas."""
         schemas = []
         for tool in self._tools.values():
-            schemas.append({
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.parameters_schema(),
-            })
+            schemas.append(
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters_schema(),
+                }
+            )
         return schemas
 
 
@@ -88,10 +96,7 @@ def _trim_payload(payload: Any) -> Any:
     if isinstance(payload, dict):
         trimmed: dict[Any, Any] = {}
         for key, value in payload.items():
-            if (
-                key in _OMIT_FIELDS
-                and isinstance(value, str)
-            ):
+            if key in _OMIT_FIELDS and isinstance(value, str):
                 trimmed[key] = f"[omitted {len(value)} chars]"
             else:
                 trimmed[key] = _trim_payload(value)

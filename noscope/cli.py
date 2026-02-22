@@ -28,8 +28,12 @@ def run(
     sandbox: bool = typer.Option(False, "--sandbox", help="Run commands in Docker sandbox"),
     provider: str = typer.Option(None, "--provider", "-p", help="LLM provider (anthropic|openai)"),
     model: str = typer.Option(None, "--model", "-m", help="LLM model override"),
-    danger: bool = typer.Option(False, "--danger", help="Enable danger mode (bypass safety filters)"),
-    auto_approve: bool = typer.Option(False, "--yes", "-y", help="Auto-approve all capability requests"),
+    danger: bool = typer.Option(
+        False, "--danger", help="Enable danger mode (bypass safety filters)"
+    ),
+    auto_approve: bool = typer.Option(
+        False, "--yes", "-y", help="Auto-approve all capability requests"
+    ),
     tui: bool = typer.Option(False, "--tui", help="Use full TUI interface"),
 ) -> None:
     """Build an MVP from a spec within a timebox."""
@@ -85,7 +89,9 @@ def doctor() -> None:
     from dotenv import load_dotenv
 
     load_dotenv()
-    has_anthropic = bool(os.environ.get("NOSCOPE_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"))
+    has_anthropic = bool(
+        os.environ.get("NOSCOPE_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+    )
     has_openai = bool(os.environ.get("NOSCOPE_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY"))
     checks.append(("Anthropic API key", has_anthropic, "set" if has_anthropic else "not set"))
     checks.append(("OpenAI API key", has_openai, "set" if has_openai else "not set"))
@@ -121,7 +127,9 @@ def new(
     provider: str = typer.Option(None, "--provider", "-p", help="LLM provider (anthropic|openai)"),
     model: str = typer.Option(None, "--model", "-m", help="LLM model override"),
     danger: bool = typer.Option(False, "--danger", help="Enable danger mode"),
-    auto_approve: bool = typer.Option(False, "--yes", "-y", help="Auto-approve all capability requests"),
+    auto_approve: bool = typer.Option(
+        False, "--yes", "-y", help="Auto-approve all capability requests"
+    ),
 ) -> None:
     """Create a new project interactively and start building immediately."""
     from rich.panel import Panel
@@ -133,7 +141,11 @@ def new(
 
     ui = ConsoleUI(console)
 
-    console.print(Panel("[bold]New Project[/bold]", title="[bold blue]NoScope[/bold blue]", border_style="blue"))
+    console.print(
+        Panel(
+            "[bold]New Project[/bold]", title="[bold blue]NoScope[/bold blue]", border_style="blue"
+        )
+    )
 
     # 1. Project name
     name = Prompt.ask("\n  [bold]Project name[/bold]")
@@ -163,7 +175,9 @@ def new(
         "\n  [bold]Constraints[/bold] [dim](comma-separated, or Enter to skip)[/dim]",
         default="",
     )
-    constraints = [c.strip() for c in constraints_raw.split(",") if c.strip()] if constraints_raw else []
+    constraints = (
+        [c.strip() for c in constraints_raw.split(",") if c.strip()] if constraints_raw else []
+    )
 
     # 5. Acceptance checks (optional)
     acceptance_raw = Prompt.ask(
@@ -195,9 +209,9 @@ def new(
 name: "{spec.name}"
 timebox: "{spec.timebox}"
 constraints:
-{chr(10).join(f'  - "{c}"' for c in constraints) if constraints else '  []'}
+{chr(10).join(f'  - "{c}"' for c in constraints) if constraints else "  []"}
 acceptance:
-{chr(10).join(f'  - "{a.raw}"' for a in acceptance) if acceptance else '  []'}
+{chr(10).join(f'  - "{a.raw}"' for a in acceptance) if acceptance else "  []"}
 ---
 
 {spec.body}
@@ -237,7 +251,7 @@ acceptance:
 @app.command()
 def init() -> None:
     """Create a spec file template."""
-    template = '''---
+    template = """---
 name: "My Project"
 timebox: "30m"
 constraints:
@@ -250,7 +264,7 @@ acceptance:
 # My Project
 
 Describe what you want built here.
-'''
+"""
     path = Path("spec.md")
     if path.exists():
         for i in range(1, 100):
@@ -260,13 +274,6 @@ Describe what you want built here.
 
     path.write_text(template, encoding="utf-8")
     console.print(f"[green]Created {path}[/green] — edit it and run: noscope run --spec {path}")
-
-
-@app.command()
-def replay() -> None:
-    """Replay a previous run. (stub — coming in v0.2)"""
-    console.print("[yellow]Replay is not yet implemented. Coming in v0.2.[/yellow]")
-    raise typer.Exit(0)
 
 
 def main() -> None:

@@ -41,9 +41,7 @@ class TestRequestPhase:
 class TestHandoffPhase:
     async def test_fallback_report(self, tmp_path: Path) -> None:
         spec = SpecInput(name="Test", timebox="5m", constraints=["Python"])
-        plan = PlanOutput(
-            tasks=[PlanTask(id="t1", title="Build it", kind="edit", completed=True)]
-        )
+        plan = PlanOutput(tasks=[PlanTask(id="t1", title="Build it", kind="edit", completed=True)])
         tasks = plan.tasks
         acceptance_results = [{"name": "check1", "passed": True}]
 

@@ -22,6 +22,9 @@ from noscope.tools.dispatcher import ToolDispatcher
 if TYPE_CHECKING:
     from noscope.ui.console import ConsoleUI
 
+MAX_BUILD_ITERATIONS = 200
+MAX_VERIFY_ITERATIONS = 50
+
 
 class TokenTracker:
     """Accumulates token usage across all LLM calls."""
@@ -156,8 +159,7 @@ class BuildPhase:
 
         # Initial user message with the plan
         task_list = "\n".join(
-            f"- [{t.id}] {t.title} ({t.kind}, {t.priority}): {t.description}"
-            for t in all_tasks
+            f"- [{t.id}] {t.title} ({t.kind}, {t.priority}): {t.description}" for t in all_tasks
         )
         messages.append(
             Message(
@@ -188,8 +190,7 @@ class BuildPhase:
         panic_shown = False
 
         # Agent loop
-        max_iterations = 200
-        for _iteration in range(max_iterations):
+        for _iteration in range(MAX_BUILD_ITERATIONS):
             if deadline.is_expired():
                 event_log.emit(
                     phase=Phase.BUILD.value,
@@ -369,12 +370,14 @@ class HardenPhase:
                 "exec_command", {"command": cmd, "timeout": 30}, context
             )
             passed = result.status == "ok"
-            results.append({
-                "name": name,
-                "cmd": cmd,
-                "passed": passed,
-                "output": result.display[:1000],
-            })
+            results.append(
+                {
+                    "name": name,
+                    "cmd": cmd,
+                    "passed": passed,
+                    "output": result.display[:1000],
+                }
+            )
 
             event_log.emit(
                 phase=Phase.HARDEN.value,
@@ -413,7 +416,7 @@ class VerifyPhase:
     ) -> tuple[bool, str]:
         """Returns (success, message)."""
         event_log.emit(
-            phase=Phase.HARDEN.value,
+            phase=Phase.VERIFY.value,
             event_type="verify.start",
             summary="Starting MVP verification",
         )
@@ -465,7 +468,7 @@ RESPOND WITH EXACTLY ONE OF:
         ]
 
         # Aggressive agent loop — more iterations than build phase gets
-        for _i in range(50):
+        for _i in range(MAX_VERIFY_ITERATIONS):
             if deadline.is_expired():
                 return False, "Deadline expired during verification"
 
@@ -485,18 +488,18 @@ RESPOND WITH EXACTLY ONE OF:
                 content_upper = response.content.upper()
                 if "VERIFIED:" in content_upper:
                     idx = response.content.upper().index("VERIFIED:")
-                    msg = response.content[idx + 9:].strip()
+                    msg = response.content[idx + 9 :].strip()
                     event_log.emit(
-                        phase=Phase.HARDEN.value,
+                        phase=Phase.VERIFY.value,
                         event_type="verify.pass",
                         summary=f"MVP verified: {msg}",
                     )
                     return True, msg
                 if "FAILED:" in content_upper:
                     idx = response.content.upper().index("FAILED:")
-                    msg = response.content[idx + 7:].strip()
+                    msg = response.content[idx + 7 :].strip()
                     event_log.emit(
-                        phase=Phase.HARDEN.value,
+                        phase=Phase.VERIFY.value,
                         event_type="verify.fail",
                         summary=f"MVP failed: {msg}",
                     )
@@ -560,12 +563,21 @@ class HandoffPhase:
                     if p.is_file() and ".git" not in p.parts and "__pycache__" not in p.parts
                 )
                 file_listing = "\n".join(f"- {f}" for f in files[:50])
-            except Exception:
+            except Exception as e:
+                event_log.emit(
+                    phase=Phase.HANDOFF.value,
+                    event_type="handoff.warning",
+                    summary=f"Could not list workspace files: {e}",
+                )
                 file_listing = "(could not list)"
 
         # Check for key project files to determine stack
-        has_requirements = workspace and (workspace / "requirements.txt").exists() if workspace else False
-        has_package_json = workspace and (workspace / "package.json").exists() if workspace else False
+        has_requirements = (
+            workspace and (workspace / "requirements.txt").exists() if workspace else False
+        )
+        has_package_json = (
+            workspace and (workspace / "package.json").exists() if workspace else False
+        )
 
         stack_hint = ""
         if has_requirements and not has_package_json:
@@ -593,13 +605,13 @@ Files in workspace:
 {file_listing}
 
 Completed tasks:
-{chr(10).join(f'- {t.title}' for t in completed) or '(none)'}
+{chr(10).join(f"- {t.title}" for t in completed) or "(none)"}
 
 Incomplete tasks:
-{chr(10).join(f'- {t.title}' for t in incomplete) or '(none)'}
+{chr(10).join(f"- {t.title}" for t in incomplete) or "(none)"}
 
 Acceptance results:
-{chr(10).join(f'- {"✓" if r.get("passed") else "✗"} {r["name"]}' for r in acceptance_results) or '(none)'}
+{chr(10).join(f"- {'✓' if r.get('passed') else '✗'} {r['name']}" for r in acceptance_results) or "(none)"}
 
 IMPORTANT: Base the "How to Run It" section ONLY on the actual files listed above. Do NOT guess — if you see requirements.txt, use pip. If you see package.json, use npm. Never mix them up.
 
@@ -614,14 +626,22 @@ Write the report with these sections:
 
         try:
             messages = [
-                Message(role="system", content="You write clear, concise project handoff reports in markdown."),
+                Message(
+                    role="system",
+                    content="You write clear, concise project handoff reports in markdown.",
+                ),
                 Message(role="user", content=report_data),
             ]
             response = await provider.complete(messages)
             if tokens:
                 tokens.add(response.usage)
             report = response.content
-        except Exception:
+        except Exception as e:
+            event_log.emit(
+                phase=Phase.HANDOFF.value,
+                event_type="handoff.warning",
+                summary=f"LLM handoff report failed, using fallback: {e}",
+            )
             report = self._fallback_report(spec, completed, incomplete, acceptance_results)
 
         output_path.write_text(report, encoding="utf-8")
@@ -666,7 +686,9 @@ Write the report with these sections:
         lines.append("| Check | Result |")
         lines.append("|-------|--------|")
         for r in acceptance_results:
-            status = "✓ Pass" if r.get("passed") else ("⊘ Skipped" if r.get("skipped") else "✗ Fail")
+            status = (
+                "✓ Pass" if r.get("passed") else ("⊘ Skipped" if r.get("skipped") else "✗ Fail")
+            )
             lines.append(f"| {r['name']} | {status} |")
         lines.append("")
 

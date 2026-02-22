@@ -75,7 +75,7 @@ class LLMProvider(Protocol):
         json_schema: dict[str, Any] | None = None,
     ) -> LLMResponse: ...
 
-    async def stream(
+    def stream(
         self,
         messages: list[Message],
         tools: list[ToolSchema] | None = None,

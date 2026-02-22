@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 
@@ -21,6 +22,7 @@ from noscope.phases import (
     TokenTracker,
     VerifyPhase,
 )
+from noscope.planning.models import PlanOutput
 from noscope.spec.contract import generate_contract
 from noscope.spec.models import SpecInput
 from noscope.spec.parser import parse_spec
@@ -123,8 +125,8 @@ class Orchestrator:
             GitDiffTool(),
         ])
 
-        tasks: list = []
-        acceptance_results: list = []
+        tasks: list[Any] = []
+        acceptance_results: list[dict[str, Any]] = []
 
         try:
             # 5. PLAN phase
@@ -357,7 +359,7 @@ async def _run_server(command: str, workspace: Path) -> None:
             proc.kill()
 
 
-def _empty_plan() -> object:
+def _empty_plan() -> PlanOutput:
     """Return a minimal plan for error fallback."""
     from noscope.planning.models import PlanOutput
 

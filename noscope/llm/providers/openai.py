@@ -94,7 +94,7 @@ class OpenAIProvider:
             kwargs["tools"] = _convert_tools(tools)
 
         stream = await self._client.chat.completions.create(**kwargs)
-        async for chunk in stream:  # type: ignore[union-attr]
+        async for chunk in stream:
             if not chunk.choices:
                 # Final chunk with usage
                 if chunk.usage:

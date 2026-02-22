@@ -689,7 +689,7 @@ def _tool_summary(name: str, args: dict[str, Any]) -> str:
         return f"reading {args.get('path', '?')}"
     if name == "exec_command":
         cmd = args.get("command", "")
-        return cmd[:80] if len(cmd) <= 80 else cmd[:77] + "..."
+        return str(cmd[:80]) if len(cmd) <= 80 else str(cmd[:77]) + "..."
     if name == "list_directory":
         return f"listing {args.get('path', '.')}"
     if name == "create_directory":

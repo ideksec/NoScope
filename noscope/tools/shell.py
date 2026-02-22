@@ -77,7 +77,7 @@ class ShellTool(Tool):
                 proc.communicate(), timeout=timeout
             )
         except TimeoutError:
-            proc.kill()  # type: ignore[union-attr]
+            proc.kill()
             return ToolResult.error(f"Command timed out after {timeout}s")
         except OSError as e:
             return ToolResult.error(f"Failed to execute: {e}")

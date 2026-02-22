@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from noscope.tools.safety import check_command_safety, check_path_safety, resolve_workspace_path
 
 
@@ -50,6 +52,14 @@ class TestPathSafety:
         result = check_path_safety("/etc/passwd", workspace)
         assert result is not None
 
+    def test_prefix_collision_outside_denied(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        outside = tmp_path / "ws-leak"
+        outside.mkdir()
+        result = check_path_safety(str(outside / "secret.txt"), workspace)
+        assert result is not None
+
 
 class TestResolveWorkspacePath:
     def test_relative(self, tmp_path: Path) -> None:
@@ -61,6 +71,13 @@ class TestResolveWorkspacePath:
     def test_traversal_raises(self, tmp_path: Path) -> None:
         workspace = tmp_path / "ws"
         workspace.mkdir()
-        import pytest
         with pytest.raises(ValueError):
             resolve_workspace_path("../../etc/passwd", workspace)
+
+    def test_prefix_collision_raises(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        outside = tmp_path / "ws-evil"
+        outside.mkdir()
+        with pytest.raises(ValueError):
+            resolve_workspace_path(str(outside / "secret.txt"), workspace)

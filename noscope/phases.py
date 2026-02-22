@@ -320,6 +320,13 @@ Rules:
 - Test that the app starts after writing the core files
 - When done with all tasks, say "BUILD COMPLETE" in your response
 
+CRITICAL — DO NOT USE INTERACTIVE SCAFFOLDING TOOLS:
+- NEVER use create-react-app, npm create, npx create-*, yarn create, or similar
+- These commands hang waiting for input and will waste your entire time budget
+- Instead, write package.json and project files MANUALLY — it's faster and more reliable
+- Use "npm init -y" if you need a basic package.json, then edit it
+- Use "npm install" (not "npm create") to install dependencies
+
 MVP definition: {json.dumps(plan.mvp_definition)}
 Exclusions: {json.dumps(plan.exclusions)}
 """

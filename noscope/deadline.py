@@ -17,11 +17,11 @@ class Phase(StrEnum):
 
 # Default time allocation per phase (fraction of total)
 DEFAULT_ALLOCATION: dict[Phase, float] = {
-    Phase.PLAN: 0.10,
+    Phase.PLAN: 0.05,
     Phase.REQUEST: 0.00,  # REQUEST is interactive, effectively zero budget
-    Phase.BUILD: 0.50,
-    Phase.HARDEN: 0.25,
-    Phase.VERIFY: 0.10,
+    Phase.BUILD: 0.65,
+    Phase.HARDEN: 0.10,
+    Phase.VERIFY: 0.15,
     Phase.HANDOFF: 0.05,
 }
 

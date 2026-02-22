@@ -14,7 +14,6 @@ from noscope.deadline import Deadline, Phase
 from noscope.llm import create_provider
 from noscope.logging.events import EventLog, RunDir
 from noscope.phases import (
-    BuildPhase,
     HandoffPhase,
     HardenPhase,
     PlanPhase,
@@ -26,6 +25,7 @@ from noscope.planning.models import PlanOutput
 from noscope.spec.contract import generate_contract
 from noscope.spec.models import SpecInput
 from noscope.spec.parser import parse_spec
+from noscope.supervisor import Supervisor
 from noscope.tools.base import ToolContext
 from noscope.tools.dispatcher import ToolDispatcher
 from noscope.tools.filesystem import (
@@ -184,17 +184,16 @@ class Orchestrator:
                 danger_mode=self.settings.danger_mode,
             )
 
-            build_phase = BuildPhase()
-            tasks = await build_phase.run(
-                plan_output,
-                self.provider,
-                dispatcher,
-                tool_context,
-                event_log,
-                deadline,
+            supervisor = Supervisor(
+                provider=self.provider,
+                dispatcher=dispatcher,
+                context=tool_context,
+                event_log=event_log,
+                deadline=deadline,
                 ui=self.ui,
                 tokens=tokens,
             )
+            tasks = await supervisor.run(plan_output, workspace)
             completed = sum(1 for t in tasks if t.completed)
             self.ui.console.print(f"  Completed [cyan]{completed}/{len(tasks)}[/cyan] tasks")
 

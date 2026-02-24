@@ -98,21 +98,35 @@ class Supervisor:
             deps_prompt = self._setup_deps_prompt(plan, workspace)
 
             # Run both in parallel — one writes files, the other installs deps
-            await asyncio.gather(
+            setup_results = await asyncio.gather(
                 structure_agent.run(setup_tasks, structure_prompt),
                 deps_agent.run([], deps_prompt),  # No tasks to mark — just install
                 return_exceptions=True,
             )
 
-            # Mark setup tasks complete if not already done
-            for t in setup_tasks:
-                if not t.completed:
-                    t.completed = True
+            # Log any setup agent failures
+            labels = ["setup-structure", "setup-deps"]
+            setup_failed = False
+            for i, result in enumerate(setup_results):
+                if isinstance(result, BaseException):
+                    setup_failed = True
+                    self.event_log.emit(
+                        phase=Phase.BUILD.value,
+                        event_type="agent.error",
+                        summary=f"Setup agent {labels[i]} failed: {result}",
+                        data={"agent": labels[i], "error": str(result)},
+                    )
+
+            # Only mark setup complete if the structure agent succeeded
+            if not setup_failed:
+                for t in setup_tasks:
+                    if not t.completed:
+                        t.completed = True
 
             self.event_log.emit(
                 phase=Phase.BUILD.value,
                 event_type="supervisor.setup_done",
-                summary="Setup complete (parallel structure + deps)",
+                summary=f"Setup {'complete' if not setup_failed else 'FAILED'} (parallel structure + deps)",
             )
 
         # Phase 2: Parallel workers on remaining tasks
@@ -163,10 +177,12 @@ class Supervisor:
             audit_coro = audit.run_continuous()
 
             # Run workers and audit concurrently
-            results = await asyncio.gather(*worker_coros, audit_coro, return_exceptions=True)
+            gather_results: list[object] = list(
+                await asyncio.gather(*worker_coros, audit_coro, return_exceptions=True)
+            )
 
             # Log any worker exceptions (don't let failures go silent)
-            for i, result in enumerate(results):
+            for i, result in enumerate(gather_results):  # type: ignore[assignment]
                 if isinstance(result, BaseException):
                     label = f"worker-{i}" if i < len(worker_coros) else "audit"
                     self.event_log.emit(

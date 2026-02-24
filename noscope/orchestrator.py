@@ -59,7 +59,7 @@ class Orchestrator:
             return "gpt-4o"
         return "claude-sonnet-4-20250514"
 
-    def _handle_dirty_workspace(self, workspace: Path, spec: SpecInput) -> Path:
+    def _handle_dirty_workspace(self, workspace: Path) -> Path:
         """Prompt user when workspace is non-empty. Returns the workspace to use."""
         from rich.prompt import Prompt
 
@@ -120,7 +120,7 @@ class Orchestrator:
         workspace.mkdir(parents=True, exist_ok=True)
 
         if _workspace_has_files(workspace) and not auto_approve:
-            workspace = self._handle_dirty_workspace(workspace, spec)
+            workspace = self._handle_dirty_workspace(workspace)
         elif _workspace_has_files(workspace) and auto_approve:
             # With --yes, auto-clear and start fresh
             _clear_workspace(workspace)

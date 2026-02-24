@@ -86,7 +86,9 @@ class DockerSandbox:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            await proc.communicate()
+            _, cp_err = await proc.communicate()
+            if proc.returncode != 0:
+                raise RuntimeError(f"Failed to copy workspace into container: {cp_err.decode()}")
 
         return self._container_id
 
@@ -132,7 +134,9 @@ class DockerSandbox:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        await proc.communicate()
+        _, cp_err = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(f"Failed to copy workspace out of container: {cp_err.decode()}")
 
     async def stop(self) -> None:
         """Sync files out, then stop and remove the container."""

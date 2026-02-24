@@ -98,8 +98,8 @@ class BuildAgent:
             if self.deadline.is_expired() or self.deadline.should_transition(Phase.BUILD):
                 break
 
-            # Check if all assigned tasks are done
-            if all(t.completed for t in tasks):
+            # Check if all assigned tasks are done (skip check if no tasks assigned)
+            if tasks and all(t.completed for t in tasks):
                 self.event_log.emit(
                     phase=Phase.BUILD.value,
                     event_type="agent.tasks_complete",

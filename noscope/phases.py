@@ -232,9 +232,16 @@ DO THIS IN ORDER — no unnecessary steps:
 2. Install deps immediately (npm install OR python3 -m pip install -r requirements.txt)
 3. Start the app in background and test it:
    - Node.js: Run "node server.js &" or "npm start &", wait 2s, curl localhost
-   - Python/Flask: Run "python3 app.py &", wait 2s, curl localhost:5000
+   - Python/Flask: Run "nohup python3 app.py > /dev/null 2>&1 &", wait 2s, curl localhost:5000
    - If it fails, READ THE ERROR, fix the code, try again
 4. Once the server responds to curl, immediately respond with VERIFIED
+
+CRITICAL — LAUNCHING PYTHON APPS:
+- ALWAYS use "python3 app.py" or "python3 main.py" — run the file DIRECTLY
+- NEVER use "python3 -c ..." to launch Flask/FastAPI — it breaks the debug reloader
+- If the app has debug=True, that's fine — just run the file directly
+- To background it: "nohup python3 app.py > /dev/null 2>&1 &" then "sleep 2 && curl -s localhost:5000"
+- If the app runs on a different port (8080, 3000, etc), curl THAT port
 
 DO NOT:
 - Read every file — you don't need to understand all the code
@@ -244,7 +251,8 @@ DO NOT:
 FIXING (if needed):
 - Missing module → install it
 - Import error → fix the import
-- Missing file → create it
+- Missing template/file → create a minimal one
+- Port already in use → kill the process: "lsof -ti :<PORT> | xargs kill"
 - Max 3 fix attempts, then FAILED
 
 Use python3 (not python) and python3 -m pip (not pip).

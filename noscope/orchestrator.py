@@ -28,7 +28,14 @@ from noscope.spec.parser import parse_spec
 from noscope.supervisor import Supervisor
 from noscope.tools.base import ToolContext
 from noscope.tools.dispatcher import ToolDispatcher
-from noscope.tools.docker import DockerSandbox, DockerShellTool
+from noscope.tools.docker import (
+    DockerCreateDirectoryTool,
+    DockerListDirectoryTool,
+    DockerReadFileTool,
+    DockerSandbox,
+    DockerShellTool,
+    DockerWriteFileTool,
+)
 from noscope.tools.filesystem import (
     CreateDirectoryTool,
     ListDirectoryTool,
@@ -146,31 +153,45 @@ class Orchestrator:
         # 4. Start deadline
         deadline = Deadline(spec.timebox_seconds)
 
-        # Set up tools — use Docker shell if sandbox mode requested
+        # Set up tools — route ALL operations through Docker when sandbox is active
         docker_sandbox: DockerSandbox | None = None
+        dispatcher = ToolDispatcher()
+
         if sandbox:
             docker_sandbox = DockerSandbox(workspace)
             await docker_sandbox.ensure_running()
-            shell_tool: ShellTool | DockerShellTool = DockerShellTool(docker_sandbox)
-            self.ui.console.print("  [cyan]Docker sandbox active[/cyan] — commands run in isolated container")
+            self.ui.console.print(
+                "  [cyan]Docker sandbox active[/cyan] — all operations run in isolated container"
+            )
+            dispatcher.register_all(
+                [
+                    DockerReadFileTool(docker_sandbox),
+                    DockerWriteFileTool(docker_sandbox),
+                    DockerListDirectoryTool(docker_sandbox),
+                    DockerCreateDirectoryTool(docker_sandbox),
+                    DockerShellTool(docker_sandbox),
+                    GitInitTool(),
+                    GitStatusTool(),
+                    GitAddTool(),
+                    GitCommitTool(),
+                    GitDiffTool(),
+                ]
+            )
         else:
-            shell_tool = ShellTool()
-
-        dispatcher = ToolDispatcher()
-        dispatcher.register_all(
-            [
-                ReadFileTool(),
-                WriteFileTool(),
-                ListDirectoryTool(),
-                CreateDirectoryTool(),
-                shell_tool,
-                GitInitTool(),
-                GitStatusTool(),
-                GitAddTool(),
-                GitCommitTool(),
-                GitDiffTool(),
-            ]
-        )
+            dispatcher.register_all(
+                [
+                    ReadFileTool(),
+                    WriteFileTool(),
+                    ListDirectoryTool(),
+                    CreateDirectoryTool(),
+                    ShellTool(),
+                    GitInitTool(),
+                    GitStatusTool(),
+                    GitAddTool(),
+                    GitCommitTool(),
+                    GitDiffTool(),
+                ]
+            )
 
         tasks: list[Any] = []
         acceptance_results: list[dict[str, Any]] = []
@@ -196,15 +217,16 @@ class Orchestrator:
                 json.dumps(plan_output.model_dump(), indent=2), encoding="utf-8"
             )
 
-            # 6. REQUEST phase
+            # 6. REQUEST phase — danger mode auto-approves everything
+            should_auto = auto_approve or self.settings.danger_mode
             self.ui.phase_banner(
                 Phase.REQUEST, "Reviewing capabilities...", deadline.format_remaining()
             )
-            if not auto_approve:
+            if not should_auto:
                 self.ui.capability_table(plan_output.requested_capabilities)
             request_phase = RequestPhase()
             grants = await request_phase.run(
-                plan_output, event_log, deadline, auto_approve=auto_approve
+                plan_output, event_log, deadline, auto_approve=should_auto
             )
             approved = sum(1 for g in grants if g.approved)
             self.ui.console.print(f"  Approved [cyan]{approved}/{len(grants)}[/cyan] capabilities")
@@ -321,7 +343,9 @@ class Orchestrator:
         if docker_sandbox:
             try:
                 await docker_sandbox.stop()
-                self.ui.console.print("  [cyan]Docker sandbox stopped[/cyan] — files synced to workspace")
+                self.ui.console.print(
+                    "  [cyan]Docker sandbox stopped[/cyan] — files synced to workspace"
+                )
             except Exception as e:
                 self.ui.console.print(f"  [red]Docker sync failed:[/red] {e}")
 

@@ -169,6 +169,172 @@ class DockerSandbox:
         await proc.communicate()
 
 
+class DockerFileTool:
+    """Mixin that routes file operations through a Docker container."""
+
+    def __init__(self, sandbox: DockerSandbox) -> None:
+        self._sandbox = sandbox
+
+    async def _read_in_container(self, rel_path: str) -> tuple[bool, str]:
+        """Read a file inside the container. Returns (success, content_or_error)."""
+        code, stdout, stderr = await self._sandbox.execute(
+            f'cat "/workspace/{rel_path}"', timeout=10
+        )
+        if code != 0:
+            return False, stderr or f"File not found: {rel_path}"
+        return True, stdout
+
+    async def _write_in_container(self, rel_path: str, content: str) -> tuple[bool, str]:
+        """Write a file inside the container. Returns (success, error_msg)."""
+        # Ensure parent directory exists
+        parent = "/workspace/" + "/".join(rel_path.split("/")[:-1])
+        if parent != "/workspace/":
+            await self._sandbox.execute(f'mkdir -p "{parent}"', timeout=5)
+        # Write via heredoc to handle special characters
+        escaped = content.replace("\\", "\\\\").replace("'", "'\\''")
+        code, _, stderr = await self._sandbox.execute(
+            f"cat > '/workspace/{rel_path}' << 'NOSCOPE_EOF'\n{escaped}\nNOSCOPE_EOF",
+            timeout=30,
+        )
+        if code != 0:
+            return False, stderr
+        return True, ""
+
+    async def _list_in_container(self, rel_path: str) -> tuple[bool, str]:
+        """List a directory inside the container. Returns (success, listing_or_error)."""
+        code, stdout, stderr = await self._sandbox.execute(
+            f'ls -1F "/workspace/{rel_path}"', timeout=10
+        )
+        if code != 0:
+            return False, stderr or f"Directory not found: {rel_path}"
+        return True, stdout
+
+    async def _mkdir_in_container(self, rel_path: str) -> tuple[bool, str]:
+        """Create a directory inside the container."""
+        code, _, stderr = await self._sandbox.execute(
+            f'mkdir -p "/workspace/{rel_path}"', timeout=5
+        )
+        if code != 0:
+            return False, stderr
+        return True, ""
+
+
+class DockerReadFileTool(Tool):
+    name = "read_file"
+    description = "Read the contents of a file within the workspace"
+    required_capability = Capability.WORKSPACE_RW
+
+    def __init__(self, sandbox: DockerSandbox) -> None:
+        self._docker = DockerFileTool(sandbox)
+
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path relative to workspace"},
+            },
+            "required": ["path"],
+        }
+
+    async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        ok, result = await self._docker._read_in_container(args["path"])
+        if not ok:
+            return ToolResult.error(result)
+        return ToolResult.ok(display=result, content=result, path=args["path"])
+
+
+class DockerWriteFileTool(Tool):
+    name = "write_file"
+    description = "Write or create a file within the workspace"
+    required_capability = Capability.WORKSPACE_RW
+
+    def __init__(self, sandbox: DockerSandbox) -> None:
+        self._docker = DockerFileTool(sandbox)
+
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path relative to workspace"},
+                "content": {"type": "string", "description": "File content to write"},
+            },
+            "required": ["path", "content"],
+        }
+
+    async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        ok, err = await self._docker._write_in_container(args["path"], args["content"])
+        if not ok:
+            return ToolResult.error(f"Failed to write: {err}")
+        return ToolResult.ok(display=f"Wrote {args['path']}", path=args["path"])
+
+
+class DockerListDirectoryTool(Tool):
+    name = "list_directory"
+    description = "List contents of a directory within the workspace"
+    required_capability = Capability.WORKSPACE_RW
+
+    def __init__(self, sandbox: DockerSandbox) -> None:
+        self._docker = DockerFileTool(sandbox)
+
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Directory path relative to workspace",
+                    "default": ".",
+                },
+            },
+        }
+
+    async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        rel_path = args.get("path", ".")
+        ok, result = await self._docker._list_in_container(rel_path)
+        if not ok:
+            return ToolResult.error(result)
+        # Parse ls -1F output into entries
+        entries = [
+            line.rstrip("/").rstrip("*").rstrip("@")
+            for line in result.strip().split("\n")
+            if line.strip()
+        ]
+        listing = []
+        for line in result.strip().split("\n"):
+            if not line.strip():
+                continue
+            if line.endswith("/"):
+                listing.append(f"d {line.rstrip('/')}")
+            else:
+                listing.append(f"f {line.rstrip('*')}")
+        display = "\n".join(listing) if listing else "(empty directory)"
+        return ToolResult.ok(display=display, entries=entries)
+
+
+class DockerCreateDirectoryTool(Tool):
+    name = "create_directory"
+    description = "Create a directory (and parents) within the workspace"
+    required_capability = Capability.WORKSPACE_RW
+
+    def __init__(self, sandbox: DockerSandbox) -> None:
+        self._docker = DockerFileTool(sandbox)
+
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Directory path relative to workspace"},
+            },
+            "required": ["path"],
+        }
+
+    async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        ok, err = await self._docker._mkdir_in_container(args["path"])
+        if not ok:
+            return ToolResult.error(f"Failed to create directory: {err}")
+        return ToolResult.ok(display=f"Created {args['path']}", path=args["path"])
+
+
 class DockerShellTool(Tool):
     """Shell tool that executes inside a Docker container."""
 

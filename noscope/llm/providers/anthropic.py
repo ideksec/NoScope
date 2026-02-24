@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -46,7 +47,17 @@ class AnthropicProvider:
         if tools:
             kwargs["tools"] = _convert_tools(tools)
 
-        response = await self._client.messages.create(**kwargs)
+        # Retry on rate limits with exponential backoff
+        max_retries = 4
+        for attempt in range(max_retries + 1):
+            try:
+                response = await self._client.messages.create(**kwargs)
+                break
+            except anthropic.RateLimitError:
+                if attempt >= max_retries:
+                    raise
+                wait = 2**attempt  # 1s, 2s, 4s, 8s
+                await asyncio.sleep(wait)
 
         content = ""
         tool_calls: list[ToolCall] = []

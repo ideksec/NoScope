@@ -19,8 +19,9 @@ if TYPE_CHECKING:
     from noscope.phases import TokenTracker
     from noscope.ui.console import ConsoleUI
 
-# Maximum parallel workers (beyond setup agent)
-MAX_WORKERS = 3
+# Maximum parallel workers (beyond setup agent).
+# Keep at 2 to avoid API rate limits with concurrent LLM streams.
+MAX_WORKERS = 2
 
 
 class Supervisor:

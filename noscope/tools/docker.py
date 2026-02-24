@@ -1,4 +1,9 @@
-"""Docker sandbox for isolated command execution."""
+"""Docker sandbox for isolated command execution.
+
+The container has NO host filesystem mounts. Workspace files are copied in
+at start and copied out at stop, so the agent has full freedom inside the
+container with zero risk to the host.
+"""
 
 from __future__ import annotations
 
@@ -12,12 +17,18 @@ from noscope.tools.redaction import redact_text
 from noscope.tools.safety import check_command_safety
 
 DOCKER_IMAGE = "python:3.12-slim"
-DOCKER_MEMORY_LIMIT = "512m"
-DOCKER_CPU_LIMIT = "1.0"
+DOCKER_MEMORY_LIMIT = "1g"
+DOCKER_CPU_LIMIT = "2.0"
 
 
 class DockerSandbox:
-    """Manages a Docker container for sandboxed execution."""
+    """Manages a fully isolated Docker container.
+
+    The host workspace is NEVER bind-mounted. Instead:
+    1. On start: workspace files are copied INTO the container via `docker cp`
+    2. The agent runs with full root inside the container — no restrictions
+    3. On stop: modified files are copied OUT of the container back to host
+    """
 
     def __init__(self, workspace: Path, image: str = DOCKER_IMAGE) -> None:
         self.workspace = workspace
@@ -25,27 +36,31 @@ class DockerSandbox:
         self._container_id: str | None = None
 
     async def ensure_running(self) -> str:
-        """Ensure the sandbox container is running. Returns container ID."""
+        """Start the sandbox container (no host mounts). Returns container ID."""
         if self._container_id:
             return self._container_id
 
+        # Create container with NO volume mounts — fully isolated
         proc = await asyncio.create_subprocess_exec(
             "docker",
             "run",
             "-d",
             "--rm",
-            "-v",
-            f"{self.workspace}:/workspace",
             "-w",
             "/workspace",
             "--memory",
             DOCKER_MEMORY_LIMIT,
             "--cpus",
             DOCKER_CPU_LIMIT,
+            "--cap-drop=ALL",
+            "--cap-add=CHOWN",
+            "--cap-add=DAC_OVERRIDE",
+            "--cap-add=FOWNER",
+            "--cap-add=SETGID",
+            "--cap-add=SETUID",
+            "--cap-add=NET_BIND_SERVICE",
             "--security-opt",
             "no-new-privileges",
-            "--network",
-            "bridge",
             self.image,
             "sleep",
             "infinity",
@@ -57,6 +72,22 @@ class DockerSandbox:
             raise RuntimeError(f"Failed to start Docker sandbox: {stderr.decode()}")
 
         self._container_id = stdout.decode().strip()
+
+        # Create /workspace inside the container
+        await self._exec_raw("mkdir -p /workspace")
+
+        # Copy workspace files into the container (if any exist)
+        if any(self.workspace.iterdir()):
+            proc = await asyncio.create_subprocess_exec(
+                "docker",
+                "cp",
+                f"{self.workspace}/.",
+                f"{self._container_id}:/workspace/",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+
         return self._container_id
 
     async def execute(
@@ -80,7 +111,6 @@ class DockerSandbox:
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except TimeoutError:
-            # Kill the exec, not the container
             return 124, "", f"Command timed out after {timeout}s"
 
         return (
@@ -89,9 +119,25 @@ class DockerSandbox:
             stderr_bytes.decode("utf-8", errors="replace"),
         )
 
+    async def sync_workspace_out(self) -> None:
+        """Copy files from container back to host workspace."""
+        if not self._container_id:
+            return
+
+        proc = await asyncio.create_subprocess_exec(
+            "docker",
+            "cp",
+            f"{self._container_id}:/workspace/.",
+            f"{self.workspace}/",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+
     async def stop(self) -> None:
-        """Stop and remove the sandbox container."""
+        """Sync files out, then stop and remove the container."""
         if self._container_id:
+            await self.sync_workspace_out()
             proc = await asyncio.create_subprocess_exec(
                 "docker",
                 "kill",
@@ -101,6 +147,22 @@ class DockerSandbox:
             )
             await proc.communicate()
             self._container_id = None
+
+    async def _exec_raw(self, command: str) -> None:
+        """Run a command inside the container without capturing output."""
+        if not self._container_id:
+            return
+        proc = await asyncio.create_subprocess_exec(
+            "docker",
+            "exec",
+            self._container_id,
+            "bash",
+            "-c",
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
 
 
 class DockerShellTool(Tool):
@@ -137,6 +199,7 @@ class DockerShellTool(Tool):
         timeout = min(args.get("timeout", 60), 300)
         cwd = args.get("cwd", "/workspace")
 
+        # Safety filters still apply unless --danger is set
         denial = check_command_safety(command, danger_mode=context.danger_mode)
         if denial:
             return ToolResult.error(f"Command denied: {denial}")

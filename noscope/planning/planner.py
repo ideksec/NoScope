@@ -41,8 +41,16 @@ CRITICAL RULES:
 - All other tasks should specify depends_on: ["t1"] unless they depend on another task
 - Design tasks so parallel agents can work on them WITHOUT file conflicts
 - Each task should own specific files/components — describe which files in the description
-- Acceptance checks must use paths that match where files are actually created
 - Do NOT spend tasks on mock data files or placeholder content — inline minimal data in code
+
+ACCEPTANCE CHECKS — keep them simple:
+- All commands run from the WORKSPACE ROOT directory (not a subdirectory)
+- Use relative paths: "python3 app.py" not "cd project_name && python3 app.py"
+- NEVER reference subdirectories named after the project — files are in "." (the workspace root)
+- Focus on "does it start?" not comprehensive testing. 1-2 checks max:
+  - One check for deps: "python3 -m pip install -r requirements.txt" or "npm install"
+  - One check for startup: "timeout 5 python3 app.py" or "node server.js &; sleep 2; curl -s localhost:PORT"
+- Do NOT add checks for individual features, templates, or code quality
 
 STACK SELECTION — match complexity to timebox:
 - ≤5m: 2-3 MVP tasks. Use the SIMPLEST stack: vanilla HTML/CSS/JS, single Python file with Flask, or Node.js with Express. NO TypeScript, NO React, NO build tools, NO Tailwind.

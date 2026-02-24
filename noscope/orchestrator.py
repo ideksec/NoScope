@@ -59,6 +59,34 @@ class Orchestrator:
             return "gpt-4o"
         return "claude-sonnet-4-20250514"
 
+    def _handle_dirty_workspace(self, workspace: Path) -> Path:
+        """Prompt user when workspace is non-empty. Returns the workspace to use."""
+        from rich.prompt import Prompt
+
+        self.ui.console.print(
+            f"\n  [yellow]Warning:[/yellow] Workspace already contains files: {workspace}"
+        )
+        choice = Prompt.ask(
+            "  [bold]Clear it, use a new directory, or abort?[/bold]",
+            choices=["clear", "new", "abort"],
+            default="clear",
+        )
+        if choice == "clear":
+            _clear_workspace(workspace)
+            self.ui.console.print(f"  [green]Cleared.[/green] Building in {workspace}")
+            return workspace
+        if choice == "new":
+            suffix = 1
+            while True:
+                new_ws = workspace.parent / f"{workspace.name}-{suffix}"
+                if not new_ws.exists():
+                    break
+                suffix += 1
+            new_ws.mkdir(parents=True, exist_ok=True)
+            self.ui.console.print(f"  [green]Created new workspace:[/green] {new_ws}")
+            return new_ws
+        raise SystemExit("Aborted by user.")
+
     async def run(
         self,
         spec_path: Path | None = None,
@@ -86,10 +114,17 @@ class Orchestrator:
             spec.timebox = timebox
             spec.timebox_seconds = _parse_duration(timebox)
 
-        # 2. Set up workspace
+        # 2. Set up workspace — warn if non-empty
         workspace = output_dir or Path(f"./out/{spec.name.lower().replace(' ', '-')}")
         workspace = workspace.resolve()
         workspace.mkdir(parents=True, exist_ok=True)
+
+        if _workspace_has_files(workspace) and not auto_approve:
+            workspace = self._handle_dirty_workspace(workspace)
+        elif _workspace_has_files(workspace) and auto_approve:
+            # With --yes, auto-clear and start fresh
+            _clear_workspace(workspace)
+            self.ui.console.print(f"  [yellow]Cleared existing workspace:[/yellow] {workspace}")
 
         # 3. Set up run directory and event log
         run_dir = RunDir()
@@ -380,6 +415,26 @@ async def _run_server(command: str, workspace: Path) -> None:
             await asyncio.wait_for(proc.wait(), timeout=5)
         except TimeoutError:
             proc.kill()
+
+
+def _workspace_has_files(workspace: Path) -> bool:
+    """Check if workspace has meaningful files (not just .noscope or .git)."""
+    ignore = {".noscope", ".git", "__pycache__", ".DS_Store"}
+    return any(item.name not in ignore for item in workspace.iterdir())
+
+
+def _clear_workspace(workspace: Path) -> None:
+    """Remove all files from workspace except .noscope and .git."""
+    import shutil
+
+    ignore = {".noscope", ".git"}
+    for item in workspace.iterdir():
+        if item.name in ignore:
+            continue
+        if item.is_dir():
+            shutil.rmtree(item)
+        else:
+            item.unlink()
 
 
 def _empty_plan() -> PlanOutput:

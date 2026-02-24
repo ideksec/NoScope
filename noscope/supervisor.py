@@ -68,10 +68,13 @@ class Supervisor:
 
         if setup_tasks:
             if self.ui:
-                self.ui.tool_activity("supervisor", "running setup agent...", self.deadline)
+                self.ui.tool_activity(
+                    "supervisor", "running parallel setup agents...", self.deadline
+                )
 
-            setup_agent = BuildAgent(
-                agent_id="setup",
+            # Split setup into two parallel agents: structure + deps
+            structure_agent = BuildAgent(
+                agent_id="setup-structure",
                 provider=self.provider,
                 dispatcher=self.dispatcher,
                 context=self.context,
@@ -80,13 +83,50 @@ class Supervisor:
                 ui=self.ui,
                 tokens=self.tokens,
             )
-            setup_prompt = self._setup_prompt(plan, workspace)
-            await setup_agent.run(setup_tasks, setup_prompt)
+            deps_agent = BuildAgent(
+                agent_id="setup-deps",
+                provider=self.provider,
+                dispatcher=self.dispatcher,
+                context=self.context,
+                event_log=self.event_log,
+                deadline=self.deadline,
+                ui=self.ui,
+                tokens=self.tokens,
+            )
+
+            structure_prompt = self._setup_structure_prompt(plan, workspace)
+            deps_prompt = self._setup_deps_prompt(plan, workspace)
+
+            # Run both in parallel — one writes files, the other installs deps
+            setup_results = await asyncio.gather(
+                structure_agent.run(setup_tasks, structure_prompt),
+                deps_agent.run([], deps_prompt),  # No tasks to mark — just install
+                return_exceptions=True,
+            )
+
+            # Log any setup agent failures
+            labels = ["setup-structure", "setup-deps"]
+            setup_failed = False
+            for i, result in enumerate(setup_results):
+                if isinstance(result, BaseException):
+                    setup_failed = True
+                    self.event_log.emit(
+                        phase=Phase.BUILD.value,
+                        event_type="agent.error",
+                        summary=f"Setup agent {labels[i]} failed: {result}",
+                        data={"agent": labels[i], "error": str(result)},
+                    )
+
+            # Only mark setup complete if the structure agent succeeded
+            if not setup_failed:
+                for t in setup_tasks:
+                    if not t.completed:
+                        t.completed = True
 
             self.event_log.emit(
                 phase=Phase.BUILD.value,
                 event_type="supervisor.setup_done",
-                summary=f"Setup complete: {sum(1 for t in setup_tasks if t.completed)}/{len(setup_tasks)} tasks",
+                summary=f"Setup {'complete' if not setup_failed else 'FAILED'} (parallel structure + deps)",
             )
 
         # Phase 2: Parallel workers on remaining tasks
@@ -137,10 +177,12 @@ class Supervisor:
             audit_coro = audit.run_continuous()
 
             # Run workers and audit concurrently
-            results = await asyncio.gather(*worker_coros, audit_coro, return_exceptions=True)
+            gather_results: list[object] = list(
+                await asyncio.gather(*worker_coros, audit_coro, return_exceptions=True)
+            )
 
             # Log any worker exceptions (don't let failures go silent)
-            for i, result in enumerate(results):
+            for i, result in enumerate(gather_results):  # type: ignore[assignment]
                 if isinstance(result, BaseException):
                     label = f"worker-{i}" if i < len(worker_coros) else "audit"
                     self.event_log.emit(
@@ -228,23 +270,43 @@ class Supervisor:
 
         return streams
 
-    def _setup_prompt(self, plan: PlanOutput, workspace: Path) -> str:
+    def _setup_structure_prompt(self, plan: PlanOutput, workspace: Path) -> str:
         return f"""\
-You are the SETUP agent. Your job is to create the project foundation FAST.
+You are the STRUCTURE agent. Write all project files FAST. Another agent is installing deps in parallel.
 
 Workspace: {workspace}
 
-RULES:
-- Create project structure and install dependencies
+YOUR JOB:
+- Write package.json / requirements.txt with all needed dependencies
+- Write the main app entry point (app.py, server.js, etc)
+- Write essential config files (tsconfig.json, .env, etc)
+- Create directory structure (templates/, static/, src/, etc)
+- Do NOT run npm install or pip install — the deps agent handles that
 - NEVER use interactive scaffolding (create-react-app, npm create, etc)
-- Write package.json / requirements.txt MANUALLY, then npm install / pip install
-- Use "npm init -y" if you need a basic package.json
-- Use "python3 -m pip install" instead of bare "pip"
-- Create essential config files (tsconfig.json, etc) by writing them directly
-- Call mark_task_complete when done
-- Be FAST — other agents are waiting for you to finish before they can start
+- Call mark_task_complete when all files are written
+- Be FAST — other agents are waiting
 
 MVP definition: {json.dumps(plan.mvp_definition)}
+"""
+
+    def _setup_deps_prompt(self, plan: PlanOutput, workspace: Path) -> str:
+        return f"""\
+You are the DEPS agent. Install project dependencies FAST. Another agent is writing files in parallel.
+
+Workspace: {workspace}
+
+YOUR JOB:
+1. Wait briefly (2-3 seconds) for the structure agent to write package.json or requirements.txt
+2. Check which dependency file exists (list_directory once)
+3. Install: "python3 -m pip install -r requirements.txt" or "npm install"
+4. If the file doesn't exist yet, wait 5 more seconds and check again
+5. Once deps are installed, you're done — no need to call mark_task_complete
+
+RULES:
+- Do NOT write any files — the structure agent handles that
+- Do NOT use interactive scaffolding tools
+- Use "python3 -m pip install" not bare "pip"
+- If both package.json and requirements.txt exist, install BOTH
 """
 
     def _worker_prompt(

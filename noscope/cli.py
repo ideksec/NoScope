@@ -126,6 +126,7 @@ def doctor() -> None:
 def new(
     provider: str = typer.Option(None, "--provider", "-p", help="LLM provider (anthropic|openai)"),
     model: str = typer.Option(None, "--model", "-m", help="LLM model override"),
+    sandbox: bool = typer.Option(False, "--sandbox", help="Run commands in Docker sandbox"),
     danger: bool = typer.Option(False, "--danger", help="Enable danger mode"),
     auto_approve: bool = typer.Option(
         False, "--yes", "-y", help="Auto-approve all capability requests"
@@ -243,6 +244,7 @@ acceptance:
             spec_input=spec,
             timebox=timebox,
             output_dir=Path(output_dir),
+            sandbox=sandbox,
             auto_approve=auto_approve,
         )
     )

@@ -28,6 +28,7 @@ from noscope.spec.parser import parse_spec
 from noscope.supervisor import Supervisor
 from noscope.tools.base import ToolContext
 from noscope.tools.dispatcher import ToolDispatcher
+from noscope.tools.docker import DockerSandbox, DockerShellTool
 from noscope.tools.filesystem import (
     CreateDirectoryTool,
     ListDirectoryTool,
@@ -145,7 +146,16 @@ class Orchestrator:
         # 4. Start deadline
         deadline = Deadline(spec.timebox_seconds)
 
-        # Set up tools
+        # Set up tools — use Docker shell if sandbox mode requested
+        docker_sandbox: DockerSandbox | None = None
+        if sandbox:
+            docker_sandbox = DockerSandbox(workspace)
+            await docker_sandbox.ensure_running()
+            shell_tool: ShellTool | DockerShellTool = DockerShellTool(docker_sandbox)
+            self.ui.console.print("  [cyan]Docker sandbox active[/cyan] — commands run in isolated container")
+        else:
+            shell_tool = ShellTool()
+
         dispatcher = ToolDispatcher()
         dispatcher.register_all(
             [
@@ -153,7 +163,7 @@ class Orchestrator:
                 WriteFileTool(),
                 ListDirectoryTool(),
                 CreateDirectoryTool(),
-                ShellTool(),
+                shell_tool,
                 GitInitTool(),
                 GitStatusTool(),
                 GitAddTool(),
@@ -306,6 +316,14 @@ class Orchestrator:
                 f"# Handoff Report: {spec.name}\n\nRun failed with error: {e}\n",
                 encoding="utf-8",
             )
+
+        # Stop Docker sandbox and sync files back to host
+        if docker_sandbox:
+            try:
+                await docker_sandbox.stop()
+                self.ui.console.print("  [cyan]Docker sandbox stopped[/cyan] — files synced to workspace")
+            except Exception as e:
+                self.ui.console.print(f"  [red]Docker sync failed:[/red] {e}")
 
         event_log.emit(
             phase="DONE",

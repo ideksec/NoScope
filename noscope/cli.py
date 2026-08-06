@@ -34,7 +34,9 @@ def run(
     auto_approve: bool = typer.Option(
         False, "--yes", "-y", help="Auto-approve all capability requests"
     ),
-    tui: bool = typer.Option(False, "--tui", help="Use full TUI interface"),
+    serve: bool = typer.Option(
+        False, "--serve", help="After a verified build, launch the app (blocks until Ctrl+C)"
+    ),
 ) -> None:
     """Build an MVP from a spec within a timebox."""
     from noscope.config.settings import load_settings
@@ -67,6 +69,7 @@ def run(
             output_dir=dir,
             sandbox=sandbox,
             auto_approve=auto_approve,
+            serve=serve,
         )
     )
 
@@ -114,7 +117,7 @@ def doctor() -> None:
         detail_str = f" ({detail})" if detail else ""
         console.print(f"  {icon} {name}{detail_str}")
 
-    all_ok = all(ok for _, ok, _ in checks if "optional" not in _)
+    all_ok = all(ok for name, ok, _ in checks if "optional" not in name)
     console.print()
     if all_ok:
         console.print("[green]All checks passed![/green]")
@@ -130,6 +133,9 @@ def new(
     danger: bool = typer.Option(False, "--danger", help="Enable danger mode"),
     auto_approve: bool = typer.Option(
         False, "--yes", "-y", help="Auto-approve all capability requests"
+    ),
+    serve: bool = typer.Option(
+        False, "--serve", help="After a verified build, launch the app (blocks until Ctrl+C)"
     ),
 ) -> None:
     """Create a new project interactively and start building immediately."""
@@ -246,6 +252,7 @@ acceptance:
             output_dir=Path(output_dir),
             sandbox=sandbox,
             auto_approve=auto_approve,
+            serve=serve,
         )
     )
 

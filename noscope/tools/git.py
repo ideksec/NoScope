@@ -7,6 +7,7 @@ from typing import Any
 
 from noscope.capabilities import Capability
 from noscope.tools.base import Tool, ToolContext, ToolResult
+from noscope.tools.shell import build_execution_env
 
 
 async def _run_git(args: list[str], cwd: str, timeout: int = 30) -> tuple[int, str, str]:
@@ -15,6 +16,7 @@ async def _run_git(args: list[str], cwd: str, timeout: int = 30) -> tuple[int, s
         "git",
         *args,
         cwd=cwd,
+        env=build_execution_env(),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )

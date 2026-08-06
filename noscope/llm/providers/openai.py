@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
 from typing import Any
 
 import openai
@@ -11,20 +10,29 @@ import openai
 from noscope.llm.base import (
     LLMResponse,
     Message,
-    StreamChunk,
     ToolCall,
     ToolSchema,
     Usage,
+    prepare_structured_schema,
 )
 
-DEFAULT_MODEL = "gpt-4o"
+DEFAULT_MODEL = "gpt-5.6-terra"
+DEFAULT_MAX_RETRIES = 4
+
+# Normalize OpenAI finish reasons to the Anthropic-style stop reasons the
+# agent loops branch on (they exit on "end_turn", never on OpenAI's "stop").
+_STOP_REASON_MAP = {
+    "stop": "end_turn",
+    "tool_calls": "tool_use",
+    "length": "max_tokens",
+}
 
 
 class OpenAIProvider:
     """LLM provider using the OpenAI SDK."""
 
     def __init__(self, api_key: str, model: str | None = None) -> None:
-        self._client = openai.AsyncOpenAI(api_key=api_key)
+        self._client = openai.AsyncOpenAI(api_key=api_key, max_retries=DEFAULT_MAX_RETRIES)
         self._default_model = model or DEFAULT_MODEL
 
     async def complete(
@@ -33,6 +41,7 @@ class OpenAIProvider:
         tools: list[ToolSchema] | None = None,
         model: str | None = None,
         json_schema: dict[str, Any] | None = None,
+        effort: str | None = None,
     ) -> LLMResponse:
         model = model or self._default_model
         api_messages = _convert_messages(messages)
@@ -43,8 +52,18 @@ class OpenAIProvider:
         }
         if tools:
             kwargs["tools"] = _convert_tools(tools)
-        if json_schema:
-            kwargs["response_format"] = {"type": "json_object"}
+        if json_schema is not None:
+            # Enforce the schema rather than discarding it with bare json_object.
+            # strict=False: Pydantic schemas don't meet strict mode's
+            # all-fields-required rule (optional fields carry defaults).
+            kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "response",
+                    "schema": prepare_structured_schema(json_schema),
+                    "strict": False,
+                },
+            }
 
         response = await self._client.chat.completions.create(**kwargs)
         choice = response.choices[0]
@@ -66,48 +85,13 @@ class OpenAIProvider:
                 output_tokens=response.usage.completion_tokens,
             )
 
+        finish_reason = choice.finish_reason or ""
         return LLMResponse(
             content=msg.content or "",
             tool_calls=tool_calls,
             usage=usage,
-            stop_reason=choice.finish_reason or "",
+            stop_reason=_STOP_REASON_MAP.get(finish_reason, finish_reason),
         )
-
-    async def stream(
-        self,
-        messages: list[Message],
-        tools: list[ToolSchema] | None = None,
-        model: str | None = None,
-    ) -> AsyncIterator[StreamChunk]:
-        model = model or self._default_model
-        api_messages = _convert_messages(messages)
-
-        kwargs: dict[str, Any] = {
-            "model": model,
-            "messages": api_messages,
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-        if tools:
-            kwargs["tools"] = _convert_tools(tools)
-
-        stream = await self._client.chat.completions.create(**kwargs)
-        async for chunk in stream:
-            if not chunk.choices:
-                # Final chunk with usage
-                if chunk.usage:
-                    yield StreamChunk(
-                        is_final=True,
-                        usage=Usage(
-                            input_tokens=chunk.usage.prompt_tokens,
-                            output_tokens=chunk.usage.completion_tokens,
-                        ),
-                    )
-                continue
-
-            delta = chunk.choices[0].delta
-            if delta.content:
-                yield StreamChunk(delta_text=delta.content)
 
 
 def _convert_messages(messages: list[Message]) -> list[dict[str, Any]]:

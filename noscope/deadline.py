@@ -85,11 +85,6 @@ class Deadline:
         """True if the global deadline has passed."""
         return time.monotonic() >= self._deadline
 
-    def is_panic_mode(self) -> bool:
-        """True if remaining time < max(60s, 10% of total)."""
-        threshold = max(60.0, self.total_seconds * 0.10)
-        return self.remaining() < threshold
-
     def should_transition(self, current_phase: Phase | None = None) -> Phase | None:
         """Suggest the next phase if the current phase's time budget is exhausted."""
         current = current_phase or self._current_phase

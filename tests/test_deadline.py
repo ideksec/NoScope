@@ -23,17 +23,6 @@ class TestDeadline:
         d = Deadline(3600)
         assert d.is_expired() is False
 
-    def test_panic_mode_short_timebox(self) -> None:
-        # 60s total, panic when < max(60, 6) = 60s
-        d = Deadline(60)
-        # Essentially always in panic mode for very short timeboxes
-        assert d.is_panic_mode() is True
-
-    def test_panic_mode_long_timebox(self) -> None:
-        d = Deadline(3600)
-        # 10% of 3600 = 360s, well within remaining
-        assert d.is_panic_mode() is False
-
     def test_phase_transition(self) -> None:
         # Very short PLAN budget
         d = Deadline(10)

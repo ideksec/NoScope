@@ -67,7 +67,7 @@ Several high-risk leak paths were identified and fixed:
 ## Validation
 
 - Lint: `python3 -m ruff check noscope tests` ✅
-- Tests: `python3 -m pytest -q` ✅ (102 passed)
+- Tests: `python3 -m pytest -q` ✅ (150 passing as of Aug 2026; 102 at original audit time)
 - Added regression tests covering:
   - path prefix collision bypass prevention
   - env stripping for subprocess execution

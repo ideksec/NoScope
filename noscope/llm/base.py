@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -53,14 +52,26 @@ class LLMResponse:
     stop_reason: str = ""
 
 
-@dataclass
-class StreamChunk:
-    """A chunk from a streaming LLM response."""
+def prepare_structured_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Make a Pydantic-generated JSON schema acceptable to structured outputs.
 
-    delta_text: str = ""
-    delta_tool_call: ToolCall | None = None
-    usage: Usage | None = None
-    is_final: bool = False
+    Structured outputs require ``additionalProperties: false`` on every object;
+    Pydantic omits it. This adds it recursively (into ``$defs`` too) without
+    mutating the input, and strips presentation-only ``title`` keys.
+    """
+
+    def _walk(node: Any) -> Any:
+        if isinstance(node, dict):
+            out = {k: _walk(v) for k, v in node.items() if k != "title"}
+            if out.get("type") == "object" and "additionalProperties" not in out:
+                out["additionalProperties"] = False
+            return out
+        if isinstance(node, list):
+            return [_walk(v) for v in node]
+        return node
+
+    result: dict[str, Any] = _walk(schema)
+    return result
 
 
 @runtime_checkable
@@ -73,11 +84,5 @@ class LLMProvider(Protocol):
         tools: list[ToolSchema] | None = None,
         model: str | None = None,
         json_schema: dict[str, Any] | None = None,
+        effort: str | None = None,
     ) -> LLMResponse: ...
-
-    def stream(
-        self,
-        messages: list[Message],
-        tools: list[ToolSchema] | None = None,
-        model: str | None = None,
-    ) -> AsyncIterator[StreamChunk]: ...

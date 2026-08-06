@@ -67,3 +67,16 @@ class TestSettings:
         with patch.dict(os.environ, env, clear=False):
             s = NoscopeSettings(_env_file=None)  # type: ignore[call-arg]
             assert s.danger_mode is False
+
+
+class TestCostEstimation:
+    def test_known_model_has_cost(self) -> None:
+        from noscope.ui.console import estimate_cost
+
+        cost = estimate_cost("claude-sonnet-5", 1_000_000, 1_000_000)
+        assert cost == 18.0  # $3 in + $15 out per MTok
+
+    def test_unknown_model_returns_none(self) -> None:
+        from noscope.ui.console import estimate_cost
+
+        assert estimate_cost("some-future-model", 1000, 1000) is None

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from pydantic import ValidationError
+
 from noscope.llm.base import LLMProvider, Message
 from noscope.planning.models import PlanOutput
 from noscope.spec.models import SpecInput
@@ -15,58 +17,43 @@ if TYPE_CHECKING:
 PLAN_SYSTEM_PROMPT = """\
 You are a software architect planning an MVP build within a strict timebox.
 
-IMPORTANT: Multiple agents will execute this plan IN PARALLEL. Task t1 (setup) runs first alone, then remaining tasks run concurrently across workers. Design tasks to be independent where possible.
+The plan is executed by several agents in parallel: task t1 (setup) runs first
+on its own, then the remaining tasks run concurrently across workers. Design
+tasks to be independent where you can, and have each own specific files so
+parallel workers don't collide — name those files in the description.
 
-Given a project specification, produce a structured JSON plan. Your output must be valid JSON matching this schema:
+The single most important outcome is that the built app actually runs; a broken
+app is a failure no matter how many features it has. Favor fewer, working
+features over more, half-working ones.
 
-{
-  "requested_capabilities": [
-    {"cap": "workspace_rw|shell_exec|net_http|git|docker|secrets:<NAME>", "why": "justification", "risk": "low|medium|high"}
-  ],
-  "tasks": [
-    {"id": "t1", "title": "Task name", "kind": "edit|shell|test", "priority": "mvp|stretch", "description": "What to do", "depends_on": []}
-  ],
-  "mvp_definition": ["What counts as done"],
-  "exclusions": ["What is explicitly NOT being built"],
-  "acceptance_plan": [
-    {"name": "check name", "cmd": "shell command or null", "must_pass": true}
-  ]
-}
+Task rules:
+- Always request the workspace_rw and shell_exec capabilities.
+- t1 is "Set up project structure and install dependencies" and runs alone; it
+  writes the dependency manifest and creates the layout. Every other task
+  depends on t1 (or on another task it genuinely needs).
+- Don't spend a task on mock-data or placeholder files — inline minimal data
+  in code instead.
 
-CRITICAL RULES:
-- THE APP MUST RUN. A broken app is a total failure regardless of how many features it has.
-- Always request workspace_rw and shell_exec capabilities
-- Task t1 MUST be "Set up project structure and install dependencies"
-- Task t1 runs ALONE before all other tasks — it creates the foundation
-- All other tasks should specify depends_on: ["t1"] unless they depend on another task
-- Design tasks so parallel agents can work on them WITHOUT file conflicts
-- Each task should own specific files/components — describe which files in the description
-- Do NOT spend tasks on mock data files or placeholder content — inline minimal data in code
+Scope the ambition to the timebox — a small box needs a simpler stack and fewer
+tasks so the result actually runs in time:
+- ≤5m: 2-3 tasks, simplest possible stack (vanilla HTML/CSS/JS, a single Flask
+  file, or Express) — no TypeScript, React, build tools, or Tailwind.
+- 5-10m: 3-5 tasks, lightweight frameworks (Flask, Express); avoid heavy build chains.
+- 10-20m: 5-7 tasks; frameworks and TypeScript are fine if the spec needs them.
+- 20m+: full stack is fine, 8+ tasks plus stretch tasks. Mark features you'd
+  only add with spare time as stretch.
 
-ACCEPTANCE CHECKS — keep them simple:
-- All commands run from the WORKSPACE ROOT directory (not a subdirectory)
-- Use relative paths: "python3 app.py" not "cd project_name && python3 app.py"
-- NEVER reference subdirectories named after the project — files are in "." (the workspace root)
-- Focus on "does it start?" not comprehensive testing. 1-2 checks max:
-  - One check for deps: "python3 -m pip install -r requirements.txt" or "npm install"
-  - One check for startup: "timeout 5 python3 app.py" or "node server.js &; sleep 2; curl -s localhost:PORT"
-- Do NOT add checks for individual features, templates, or code quality
+Acceptance checks should answer "does it start?", not test features — 1-2 checks
+at most (one to install deps, one to start the app). Commands run from the
+workspace root with relative paths (`python3 app.py`, not
+`cd project_name && python3 app.py`), and files live at the root, not in a
+subdirectory named after the project.
 
-STACK SELECTION — match complexity to timebox:
-- ≤5m: 2-3 MVP tasks. Use the SIMPLEST stack: vanilla HTML/CSS/JS, single Python file with Flask, or Node.js with Express. NO TypeScript, NO React, NO build tools, NO Tailwind.
-- 5-10m: 3-5 MVP tasks. Lightweight frameworks OK (Flask, Express). Avoid TypeScript and complex build chains.
-- 10-20m: 5-7 MVP tasks. Frameworks OK, TypeScript OK if the spec requires it.
-- 20m+: Full stack OK, up to 8+ MVP tasks + stretch tasks.
+Do not plan tasks or checks that use interactive scaffolding (create-react-app,
+npm create, npx create-*, yarn create) — they hang and burn the whole timebox.
+Write package.json / requirements.txt by hand, then install.
 
-NEVER USE INTERACTIVE SCAFFOLDING TOOLS:
-- NEVER plan tasks that use create-react-app, npm create, npx create-*, yarn create, or similar
-- These commands HANG and waste the entire timebox
-- Instead: write package.json manually, then npm install
-- For Python: write requirements.txt, then pip install -r requirements.txt
-
-Mark stretch tasks for features to add if time permits.
-
-Respond ONLY with the JSON object, no markdown fences or explanation.
+Use python3 / python3 -m pip, not python / pip.
 """
 
 
@@ -90,33 +77,39 @@ Spec body:
         Message(role="user", content=user_content),
     ]
 
-    max_retries = 2
+    # Request structured output. On current models this is schema-enforced, so
+    # the response is valid JSON; on a model that can't enforce it, the provider
+    # returns prose and the fence-strip below is the safety net. One corrective
+    # re-ask covers the rare enforced-but-still-malformed case.
+    schema = PlanOutput.model_json_schema()
     last_error: Exception | None = None
 
-    for attempt in range(max_retries + 1):
-        response = await provider.complete(messages)
+    for _attempt in range(2):
+        response = await provider.complete(messages, json_schema=schema, effort="high")
         if tokens:
             tokens.add(response.usage)
         try:
-            raw = response.content.strip()
-            # Strip markdown fences if present
-            if raw.startswith("```"):
-                lines = raw.split("\n")
-                raw = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
-
-            data = json.loads(raw)
-            return PlanOutput.model_validate(data)
-        except (json.JSONDecodeError, Exception) as e:
+            return PlanOutput.model_validate(json.loads(_strip_fences(response.content)))
+        except (json.JSONDecodeError, ValidationError) as e:
             last_error = e
-            if attempt < max_retries:
-                messages.append(Message(role="assistant", content=response.content))
-                messages.append(
-                    Message(
-                        role="user",
-                        content=f"Your response was not valid JSON. Error: {e}. Please try again with valid JSON only.",
-                    )
+            messages.append(Message(role="assistant", content=response.content))
+            messages.append(
+                Message(
+                    role="user",
+                    content=(
+                        f"That did not parse as a valid plan ({e}). "
+                        "Reply with the plan as a single valid JSON object and nothing else."
+                    ),
                 )
+            )
 
-    raise ValueError(
-        f"Failed to generate valid plan after {max_retries + 1} attempts: {last_error}"
-    )
+    raise ValueError(f"Failed to generate a valid plan: {last_error}")
+
+
+def _strip_fences(raw: str) -> str:
+    """Strip a leading/trailing markdown code fence if the model added one."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        raw = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
+    return raw

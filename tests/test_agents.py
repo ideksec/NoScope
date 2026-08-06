@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 
 from noscope.agents import AuditAgent, AuditFeed, BuildAgent
 from noscope.deadline import Deadline
-from noscope.llm.base import LLMResponse, Message, StreamChunk, ToolCall, ToolSchema, Usage
+from noscope.llm.base import LLMResponse, Message, ToolCall, ToolSchema, Usage
 from noscope.planning.models import PlanTask
 from noscope.supervisor import Supervisor
 from noscope.tools.base import ToolContext
@@ -28,20 +27,13 @@ class FakeProvider:
         tools: list[ToolSchema] | None = None,
         model: str | None = None,
         json_schema: dict[str, Any] | None = None,
+        effort: str | None = None,
     ) -> LLMResponse:
         if self._idx < len(self._responses):
             resp = self._responses[self._idx]
             self._idx += 1
             return resp
         return LLMResponse(content="BUILD COMPLETE", stop_reason="end_turn", usage=Usage())
-
-    async def stream(
-        self,
-        messages: list[Message],
-        tools: list[ToolSchema] | None = None,
-        model: str | None = None,
-    ) -> AsyncIterator[StreamChunk]:
-        yield StreamChunk(is_final=True)
 
 
 def _make_tasks() -> list[PlanTask]:

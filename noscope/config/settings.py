@@ -18,6 +18,11 @@ class NoscopeSettings(BaseSettings):
     openai_api_key: str | None = None
     default_provider: Literal["anthropic", "openai"] | None = None
     default_model: str | None = None
+    # Cheaper model for high-volume, low-stakes roles (audit checks, the
+    # handoff report). Anthropic-only; None means "use the main model".
+    fast_model: str | None = "claude-haiku-4-5"
+    max_tokens: int = 8192
+    effort: str = "high"
     default_timebox: str = "30m"
     danger_mode: bool = False
 

@@ -22,7 +22,6 @@ from noscope.tools.dispatcher import ToolDispatcher
 if TYPE_CHECKING:
     from noscope.ui.console import ConsoleUI
 
-MAX_BUILD_ITERATIONS = 200
 MAX_VERIFY_ITERATIONS = 50
 
 
@@ -215,6 +214,7 @@ class VerifyPhase:
         tokens: TokenTracker | None = None,
     ) -> tuple[bool, str]:
         """Returns (success, message)."""
+        deadline.advance_phase(Phase.VERIFY)
         event_log.emit(
             phase=Phase.VERIFY.value,
             event_type="verify.start",
@@ -222,44 +222,29 @@ class VerifyPhase:
         )
 
         system = f"""\
-You are the FINAL VERIFICATION agent. Your ONE job is to make this project RUN.
-The project is in: {context.workspace}
+You are the verification agent. Your goal is to confirm this project runs, and
+to fix small issues that stop it from running. The project is in {context.workspace}.
+Work quickly — this is time-boxed and the user is waiting on a working demo.
 
-This is a live demo. The user NEEDS a clickable working app. BE FAST.
+Approach:
+1. Find the dependency manifest (one list_directory of the root is enough).
+2. Install dependencies (`python3 -m pip install -r requirements.txt` or `npm install`).
+3. Start the app in the background and confirm it serves a request, e.g.
+   `nohup python3 app.py > /dev/null 2>&1 &` then `sleep 2 && curl -s localhost:5000`.
+   Node apps: `npm start &` (or `node server.js &`), then curl the port it logs.
+4. If it responds, you are done — a successful curl is sufficient evidence.
 
-DO THIS IN ORDER — no unnecessary steps:
-1. Check for package.json or requirements.txt (ONE list_directory call)
-2. Install deps immediately (npm install OR python3 -m pip install -r requirements.txt)
-3. Start the app in background and test it:
-   - Node.js: Run "node server.js &" or "npm start &", wait 2s, curl localhost
-   - Python/Flask: Run "nohup python3 app.py > /dev/null 2>&1 &", wait 2s, curl localhost:5000
-   - If it fails, READ THE ERROR, fix the code, try again
-4. Once the server responds to curl, immediately respond with VERIFIED
+Environment notes:
+- Use `python3` and `python3 -m pip`, not `python`/`pip`.
+- Launch Python web apps by running the file directly (`python3 app.py`), not
+  via `python3 -c` — that breaks the reloader. If a port is taken, free it with
+  `lsof -ti :<PORT> | xargs kill`. If the app uses a non-default port, curl that port.
+- You don't need to read every file or understand all the code to verify it runs.
 
-CRITICAL — LAUNCHING PYTHON APPS:
-- ALWAYS use "python3 app.py" or "python3 main.py" — run the file DIRECTLY
-- NEVER use "python3 -c ..." to launch Flask/FastAPI — it breaks the debug reloader
-- If the app has debug=True, that's fine — just run the file directly
-- To background it: "nohup python3 app.py > /dev/null 2>&1 &" then "sleep 2 && curl -s localhost:5000"
-- If the app runs on a different port (8080, 3000, etc), curl THAT port
-
-DO NOT:
-- Read every file — you don't need to understand all the code
-- Spend time on file listings beyond the root directory
-- Over-analyze — if curl gets a response, it works
-
-FIXING (if needed):
-- Missing module → install it
-- Import error → fix the import
-- Missing template/file → create a minimal one
-- Port already in use → kill the process: "lsof -ti :<PORT> | xargs kill"
-- Max 3 fix attempts, then FAILED
-
-Use python3 (not python) and python3 -m pip (not pip).
-
-RESPOND WITH EXACTLY ONE OF:
-- "VERIFIED: <one-line description>" — the app runs
-- "FAILED: <what's broken>" — unfixable after 3 attempts
+If it can't be made to run in a few fix attempts, report the blocker rather than
+looping. End with exactly one verdict line:
+- `VERIFIED: <one-line description>` if the app runs
+- `FAILED: <what's broken>` if it can't be made to run
 """
 
         messages: list[Message] = [
@@ -349,6 +334,7 @@ class HandoffPhase:
         tokens: TokenTracker | None = None,
         workspace: Path | None = None,
         verify_result: tuple[bool, str] | None = None,
+        report_model: str | None = None,
     ) -> str:
         event_log.emit(
             phase=Phase.HANDOFF.value,
@@ -440,7 +426,9 @@ Write the report with these sections:
                 ),
                 Message(role="user", content=report_data),
             ]
-            response = await provider.complete(messages)
+            # The report is a low-stakes summary — run it on the cheap model
+            # (when available) at low effort.
+            response = await provider.complete(messages, model=report_model, effort="low")
             if tokens:
                 tokens.add(response.usage)
             report = response.content

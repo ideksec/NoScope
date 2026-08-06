@@ -57,6 +57,7 @@ class Supervisor:
         if not all_tasks:
             return all_tasks
 
+        self.deadline.advance_phase(Phase.BUILD)
         self.event_log.emit(
             phase=Phase.BUILD.value,
             event_type="supervisor.start",

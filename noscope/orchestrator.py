@@ -11,7 +11,7 @@ from rich.console import Console
 from noscope.capabilities import CapabilityStore
 from noscope.config.settings import NoscopeSettings
 from noscope.deadline import Deadline, Phase
-from noscope.llm import create_provider
+from noscope.llm import create_provider, default_model_for, resolve_provider_name
 from noscope.logging.events import EventLog, RunDir
 from noscope.phases import (
     HandoffPhase,
@@ -60,12 +60,15 @@ class Orchestrator:
         self.settings = settings
         self.provider = create_provider(settings)
         self.ui = ConsoleUI(console)
-        self._model = settings.default_model or self._default_model_for_provider()
-
-    def _default_model_for_provider(self) -> str:
-        if self.settings.default_provider == "openai":
-            return "gpt-4o"
-        return "claude-sonnet-4-20250514"
+        self._provider_name = resolve_provider_name(settings)
+        self._model = settings.default_model or default_model_for(self._provider_name)
+        # fast_model is an Anthropic model id; only apply it on the Anthropic
+        # provider, and never override an explicit --model.
+        self._report_model = (
+            settings.fast_model
+            if self._provider_name == "anthropic" and settings.default_model is None
+            else None
+        )
 
     def _handle_dirty_workspace(self, workspace: Path) -> Path:
         """Prompt user when workspace is non-empty. Returns the workspace to use."""
@@ -103,6 +106,7 @@ class Orchestrator:
         output_dir: Path | None = None,
         sandbox: bool = False,
         auto_approve: bool = False,
+        serve: bool = False,
     ) -> Path:
         """Execute a full NoScope run. Returns the run directory path."""
         # Token tracking for cost calculation
@@ -326,6 +330,7 @@ class Orchestrator:
                 tokens=tokens,
                 workspace=workspace,
                 verify_result=verify_data,
+                report_model=self._report_model,
             )
         except Exception as e:
             event_log.emit(
@@ -370,7 +375,7 @@ class Orchestrator:
         checks_passed = sum(1 for r in acceptance_results if r.get("passed"))
 
         # Show final summary — ALWAYS
-        provider_name = self.settings.default_provider or "anthropic"
+        provider_name = self._provider_name
         self.ui.final_summary(
             spec_name=spec.name,
             timebox=spec.timebox,
@@ -389,10 +394,18 @@ class Orchestrator:
             model=self._model,
         )
 
-        # 12. LAUNCH — start the app for the user if verified
+        # 12. LAUNCH — only with --serve does NoScope keep a process running
+        # after the timebox; the default honors the hard-deadline guarantee.
         if verified_ok and launch_cmd:
-            self.ui.launch_app(workspace, launch_cmd, launch_url)
-            await _run_server(launch_cmd, workspace)
+            if serve:
+                self.ui.launch_app(workspace, launch_cmd, launch_url)
+                await _run_server(launch_cmd, workspace)
+            else:
+                url_hint = f" — then open [cyan]{launch_url}[/cyan]" if launch_url else ""
+                self.ui.console.print(
+                    f"\n  Run it: [bold]cd {workspace} && {launch_cmd}[/bold]{url_hint}"
+                    f"\n  [dim](pass --serve to have NoScope launch it for you)[/dim]"
+                )
 
         return run_dir.path
 

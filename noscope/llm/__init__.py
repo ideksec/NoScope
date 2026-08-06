@@ -33,6 +33,8 @@ def create_provider(settings: NoscopeSettings) -> LLMProvider:
         return AnthropicProvider(
             api_key=settings.anthropic_api_key,
             model=settings.default_model,
+            max_tokens=settings.max_tokens,
+            effort=settings.effort,
         )
     elif provider_name == "openai":
         if not settings.openai_api_key:

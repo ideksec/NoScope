@@ -92,33 +92,39 @@ Spec body:
         Message(role="user", content=user_content),
     ]
 
-    max_retries = 2
+    # Request structured output. On current models this is schema-enforced, so
+    # the response is valid JSON; on a model that can't enforce it, the provider
+    # returns prose and the fence-strip below is the safety net. One corrective
+    # re-ask covers the rare enforced-but-still-malformed case.
+    schema = PlanOutput.model_json_schema()
     last_error: Exception | None = None
 
-    for attempt in range(max_retries + 1):
-        response = await provider.complete(messages)
+    for _attempt in range(2):
+        response = await provider.complete(messages, json_schema=schema, effort="high")
         if tokens:
             tokens.add(response.usage)
         try:
-            raw = response.content.strip()
-            # Strip markdown fences if present
-            if raw.startswith("```"):
-                lines = raw.split("\n")
-                raw = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
-
-            data = json.loads(raw)
-            return PlanOutput.model_validate(data)
+            return PlanOutput.model_validate(json.loads(_strip_fences(response.content)))
         except (json.JSONDecodeError, ValidationError) as e:
             last_error = e
-            if attempt < max_retries:
-                messages.append(Message(role="assistant", content=response.content))
-                messages.append(
-                    Message(
-                        role="user",
-                        content=f"Your response was not valid JSON. Error: {e}. Please try again with valid JSON only.",
-                    )
+            messages.append(Message(role="assistant", content=response.content))
+            messages.append(
+                Message(
+                    role="user",
+                    content=(
+                        f"That did not parse as a valid plan ({e}). "
+                        "Reply with the plan as a single valid JSON object and nothing else."
+                    ),
                 )
+            )
 
-    raise ValueError(
-        f"Failed to generate valid plan after {max_retries + 1} attempts: {last_error}"
-    )
+    raise ValueError(f"Failed to generate a valid plan: {last_error}")
+
+
+def _strip_fences(raw: str) -> str:
+    """Strip a leading/trailing markdown code fence if the model added one."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        raw = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
+    return raw

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 
-from noscope.llm.base import LLMResponse, Message, StreamChunk, ToolSchema, Usage
+from noscope.llm.base import LLMResponse, Message, ToolSchema, Usage
 from noscope.phases import TokenTracker
 from noscope.planning.models import PlanOutput
 from noscope.planning.planner import plan
@@ -70,6 +69,7 @@ class FakeProvider:
         tools: list[ToolSchema] | None = None,
         model: str | None = None,
         json_schema: dict[str, Any] | None = None,
+        effort: str | None = None,
     ) -> LLMResponse:
         idx = min(self._call_count, len(self._responses) - 1)
         self._call_count += 1
@@ -77,14 +77,6 @@ class FakeProvider:
             content=self._responses[idx],
             usage=Usage(input_tokens=100, output_tokens=50),
         )
-
-    async def stream(
-        self,
-        messages: list[Message],
-        tools: list[ToolSchema] | None = None,
-        model: str | None = None,
-    ) -> AsyncIterator[StreamChunk]:
-        yield StreamChunk(delta_text="", is_final=True)
 
 
 class TestPlanner:
@@ -115,8 +107,10 @@ class TestPlanner:
     @pytest.mark.asyncio
     async def test_plan_fails_after_retries(self) -> None:
         provider = FakeProvider(["bad", "still bad", "nope"])
-        with pytest.raises(ValueError, match="Failed to generate valid plan"):
+        with pytest.raises(ValueError, match="Failed to generate a valid plan"):
             await plan(_make_spec(), provider)
+        # One structured request + one corrective re-ask, then give up.
+        assert provider._call_count == 2
 
     @pytest.mark.asyncio
     async def test_token_tracking(self) -> None:

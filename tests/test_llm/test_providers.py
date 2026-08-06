@@ -71,3 +71,36 @@ class TestProviderDefaults:
         assert _STOP_REASON_MAP["stop"] == "end_turn"
         assert _STOP_REASON_MAP["tool_calls"] == "tool_use"
         assert _STOP_REASON_MAP["length"] == "max_tokens"
+
+
+class TestStructuredSchemaPrep:
+    def test_adds_additional_properties_false_recursively(self) -> None:
+        from noscope.llm.base import prepare_structured_schema
+
+        schema = {
+            "type": "object",
+            "title": "Root",
+            "properties": {
+                "nested": {"type": "object", "properties": {"x": {"type": "string"}}},
+                "items": {"type": "array", "items": {"type": "object", "properties": {}}},
+            },
+        }
+        out = prepare_structured_schema(schema)
+        assert out["additionalProperties"] is False
+        assert out["properties"]["nested"]["additionalProperties"] is False
+        assert out["properties"]["items"]["items"]["additionalProperties"] is False
+        # presentation-only keys are stripped; input is not mutated
+        assert "title" not in out
+        assert "title" in schema
+
+    def test_plan_schema_is_prepared_cleanly(self) -> None:
+        import json
+
+        from noscope.llm.base import prepare_structured_schema
+        from noscope.planning.models import PlanOutput
+
+        out = prepare_structured_schema(PlanOutput.model_json_schema())
+        # $defs preserved; every object carries additionalProperties: false
+        assert "$defs" in out
+        text = json.dumps(out)
+        assert "title" not in json.loads(text)  # top level stripped

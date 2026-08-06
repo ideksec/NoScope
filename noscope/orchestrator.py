@@ -62,6 +62,13 @@ class Orchestrator:
         self.ui = ConsoleUI(console)
         self._provider_name = resolve_provider_name(settings)
         self._model = settings.default_model or default_model_for(self._provider_name)
+        # fast_model is an Anthropic model id; only apply it on the Anthropic
+        # provider, and never override an explicit --model.
+        self._report_model = (
+            settings.fast_model
+            if self._provider_name == "anthropic" and settings.default_model is None
+            else None
+        )
 
     def _handle_dirty_workspace(self, workspace: Path) -> Path:
         """Prompt user when workspace is non-empty. Returns the workspace to use."""
@@ -323,6 +330,7 @@ class Orchestrator:
                 tokens=tokens,
                 workspace=workspace,
                 verify_result=verify_data,
+                report_model=self._report_model,
             )
         except Exception as e:
             event_log.emit(

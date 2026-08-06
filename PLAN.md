@@ -164,22 +164,22 @@ next release.
 
 Goal: `main` runs again on today's APIs. No re-architecture.
 
-- [ ] Default models: `claude-sonnet-5` (Anthropic), current GPT-5.6 tier if
+- [x] Default models: `claude-sonnet-5` (Anthropic), current GPT-5.6 tier if
       the OpenAI path is exercised at all. Make model configurable via
       `NOSCOPE_DEFAULT_MODEL`.
-- [ ] Fix the OpenAI `stop_reason` loop-exit bug (map `"stop"` → `"end_turn"`
+- [x] Fix the OpenAI `stop_reason` loop-exit bug (map `"stop"` → `"end_turn"`
       at the provider boundary) — or gate the OpenAI provider behind a warning.
-- [ ] Replace the duplicated 2025 pricing tables with a single table for
+- [x] Replace the duplicated 2025 pricing tables with a single table for
       current models; label unknown models "unknown" instead of billing them
       at Sonnet-4 rates.
-- [ ] Fix the phase-stamping bug (`advance_phase` for BUILD/VERIFY).
-- [ ] Narrow the planner's `except Exception`; let API errors surface as API
+- [x] Fix the phase-stamping bug (`advance_phase` for BUILD/VERIFY).
+- [x] Narrow the planner's `except Exception`; let API errors surface as API
       errors.
-- [ ] Sanitize env for git subprocesses (reuse `build_execution_env`).
-- [ ] Bound `_run_server` (opt-in flag + timeout) so the hard-deadline promise
+- [x] Sanitize env for git subprocesses (reuse `build_execution_env`).
+- [x] Bound `_run_server` (opt-in flag + timeout) so the hard-deadline promise
       is honest.
-- [ ] Resolve the 5 Dependabot alerts; pin SDK minimums in `pyproject.toml`.
-- [ ] Docs truth pass: phase budgets, phase list, remove `--tui` and panic-mode
+- [x] Resolve the 5 Dependabot alerts; pin SDK minimums in `pyproject.toml`.
+- [x] Docs truth pass: phase budgets, phase list, remove `--tui` and panic-mode
       claims (and the dead code behind them), update SECURITY_AUDIT numbers.
 
 ### Phase 1 — Modernize the LLM usage (still current architecture)

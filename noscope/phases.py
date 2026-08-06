@@ -26,19 +26,38 @@ MAX_VERIFY_ITERATIONS = 50
 
 
 class TokenTracker:
-    """Accumulates token usage across all LLM calls."""
+    """Accumulates token usage across all LLM calls.
 
-    def __init__(self) -> None:
+    An optional ``budget`` (total tokens) turns the tracker into a spend cap:
+    once total usage reaches the budget, ``exceeded()`` is true and the agent
+    loops stop — the token analog of the wall-clock deadline.
+    """
+
+    def __init__(self, budget: int | None = None) -> None:
         self.input_tokens = 0
         self.output_tokens = 0
         self.cache_creation_input_tokens = 0
         self.cache_read_input_tokens = 0
+        self.budget = budget
 
     def add(self, usage: Usage) -> None:
         self.input_tokens += usage.input_tokens
         self.output_tokens += usage.output_tokens
         self.cache_creation_input_tokens += usage.cache_creation_input_tokens
         self.cache_read_input_tokens += usage.cache_read_input_tokens
+
+    def total(self) -> int:
+        """All tokens processed (prompt, cached, and output)."""
+        return (
+            self.input_tokens
+            + self.output_tokens
+            + self.cache_creation_input_tokens
+            + self.cache_read_input_tokens
+        )
+
+    def exceeded(self) -> bool:
+        """True once a budget is set and total usage has reached it."""
+        return self.budget is not None and self.total() >= self.budget
 
 
 class PlanPhase:
@@ -288,6 +307,8 @@ the harness re-runs it after you finish.
         for _i in range(MAX_REPAIR_ITERATIONS):
             if deadline.is_expired() or deadline.should_transition(Phase.HARDEN):
                 return
+            if tokens is not None and tokens.exceeded():
+                return
             response = await provider.complete(messages, tools=tool_schemas, effort="medium")
             if tokens:
                 tokens.add(response.usage)
@@ -386,6 +407,8 @@ the blocker instead of looping.
         for _i in range(MAX_VERIFY_ITERATIONS):
             if deadline.is_expired():
                 return self._fail(event_log, "Deadline expired during verification")
+            if tokens is not None and tokens.exceeded():
+                return self._fail(event_log, "Token budget reached during verification")
 
             response = await provider.complete(messages, tools=tool_schemas)
             if tokens:

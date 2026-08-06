@@ -111,8 +111,8 @@ class Orchestrator:
         serve: bool = False,
     ) -> Path:
         """Execute a full NoScope run. Returns the run directory path."""
-        # Token tracking for cost calculation
-        tokens = TokenTracker()
+        # Token tracking for cost calculation, with an optional spend cap.
+        tokens = TokenTracker(budget=self.settings.token_budget)
 
         # 1. Parse spec — from file or pre-built SpecInput
         if spec_input is not None:
@@ -403,6 +403,7 @@ class Orchestrator:
             model=self._model,
             cache_creation_tokens=tokens.cache_creation_input_tokens,
             cache_read_tokens=tokens.cache_read_input_tokens,
+            token_budget=tokens.budget,
         )
 
         # 12. LAUNCH — only with --serve does NoScope keep a process running

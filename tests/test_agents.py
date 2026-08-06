@@ -274,3 +274,71 @@ class TestAuditAgent:
         findings = await audit._run_checks()
         # Empty workspace = missing files finding
         assert any(f["type"] == "missing_files" for f in findings)
+
+
+class TestTokenBudget:
+    def test_exceeded_only_with_budget(self) -> None:
+        from noscope.phases import TokenTracker
+
+        unbounded = TokenTracker()
+        unbounded.add(Usage(input_tokens=1_000_000, output_tokens=1_000_000))
+        assert unbounded.exceeded() is False  # no budget -> never exceeded
+
+        capped = TokenTracker(budget=100)
+        capped.add(Usage(input_tokens=60, output_tokens=30))
+        assert capped.total() == 90
+        assert capped.exceeded() is False
+        capped.add(Usage(input_tokens=20))
+        assert capped.exceeded() is True
+
+    def test_total_counts_cache_tokens(self) -> None:
+        from noscope.phases import TokenTracker
+
+        t = TokenTracker()
+        t.add(
+            Usage(
+                input_tokens=1,
+                output_tokens=2,
+                cache_creation_input_tokens=3,
+                cache_read_input_tokens=4,
+            )
+        )
+        assert t.total() == 10
+
+    @pytest.mark.asyncio
+    async def test_build_agent_stops_on_budget(self, tool_context: ToolContext) -> None:
+        from noscope.logging.events import EventLog, RunDir
+        from noscope.phases import TokenTracker
+        from noscope.tools.dispatcher import ToolDispatcher
+
+        # Each call reports usage that exceeds the tiny budget; the agent should
+        # make at most one model call and then stop rather than looping.
+        calls = {"n": 0}
+
+        class CountingProvider(FakeProvider):
+            async def complete(
+                self,
+                messages: list[Message],
+                tools: list[ToolSchema] | None = None,
+                model: str | None = None,
+                json_schema: Any | None = None,
+                effort: str | None = None,
+            ) -> LLMResponse:
+                calls["n"] += 1
+                return LLMResponse(content="working", usage=Usage(input_tokens=1000))
+
+        run_dir = RunDir(base=tool_context.workspace.parent / "runs")
+        event_log = EventLog(run_dir)
+        tokens = TokenTracker(budget=100)
+        agent = BuildAgent(
+            agent_id="w",
+            provider=CountingProvider([]),
+            dispatcher=ToolDispatcher(),
+            context=tool_context,
+            event_log=event_log,
+            deadline=tool_context.deadline,
+            tokens=tokens,
+        )
+        await agent.run([PlanTask(id="t1", title="Build", kind="edit")], "Build it.")
+        event_log.close()
+        assert calls["n"] == 1  # stopped after the first over-budget call

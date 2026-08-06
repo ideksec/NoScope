@@ -136,6 +136,15 @@ class BuildAgent:
         for _iteration in range(MAX_AGENT_ITERATIONS):
             if self.deadline.is_expired() or self.deadline.should_transition(Phase.BUILD):
                 break
+            # Token spend cap — stop like a deadline so the run still hands off.
+            if self.tokens is not None and self.tokens.exceeded():
+                self.event_log.emit(
+                    phase=Phase.BUILD.value,
+                    event_type="budget.exceeded",
+                    summary=f"[{self.agent_id}] Token budget reached — stopping",
+                    data={"agent_id": self.agent_id},
+                )
+                break
 
             # Check if all assigned tasks are done (skip check if no tasks assigned)
             if tasks and all(t.completed for t in tasks):

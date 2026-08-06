@@ -37,6 +37,9 @@ def run(
     serve: bool = typer.Option(
         False, "--serve", help="After a verified build, launch the app (blocks until Ctrl+C)"
     ),
+    token_budget: int = typer.Option(
+        None, "--token-budget", help="Stop the build once this many total tokens are used"
+    ),
 ) -> None:
     """Build an MVP from a spec within a timebox."""
     from noscope.config.settings import load_settings
@@ -52,6 +55,7 @@ def run(
             default_provider=provider,
             default_model=model,
             danger_mode=danger,
+            token_budget=token_budget,
         )
     except ValueError as e:
         console.print(f"[red]Configuration error:[/red] {e}")
@@ -136,6 +140,9 @@ def new(
     ),
     serve: bool = typer.Option(
         False, "--serve", help="After a verified build, launch the app (blocks until Ctrl+C)"
+    ),
+    token_budget: int = typer.Option(
+        None, "--token-budget", help="Stop the build once this many total tokens are used"
     ),
 ) -> None:
     """Create a new project interactively and start building immediately."""
@@ -235,6 +242,7 @@ acceptance:
             default_provider=provider,
             default_model=model,
             danger_mode=danger,
+            token_budget=token_budget,
         )
     except ValueError as e:
         console.print(f"[red]Configuration error:[/red] {e}")

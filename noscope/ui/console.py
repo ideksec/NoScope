@@ -217,6 +217,7 @@ class ConsoleUI:
         model: str,
         cache_creation_tokens: int = 0,
         cache_read_tokens: int = 0,
+        token_budget: int | None = None,
     ) -> None:
         """Show comprehensive final summary — always displayed."""
         # Status line
@@ -267,6 +268,11 @@ class ConsoleUI:
                 f"  Cost:        unknown pricing for {model} "
                 f"({total_in:,} in / {output_tokens:,} out)"
             )
+
+        if token_budget is not None:
+            used = total_in + output_tokens
+            pct = f" ({used / token_budget:.0%})" if token_budget else ""
+            lines.append(f"  Budget:      {used:,} / {token_budget:,} tokens{pct}")
 
         self.console.print(
             Panel(

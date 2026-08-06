@@ -72,6 +72,10 @@ def tool_summary(name: str, args: dict[str, Any]) -> str:
         return str(cmd[:80]) if len(cmd) <= 80 else str(cmd[:77]) + "..."
     if name == "list_directory":
         return f"listing {args.get('path', '.')}"
+    if name == "search_files":
+        return f"searching /{args.get('pattern', '')}/"
+    if name == "find_files":
+        return f"finding {args.get('pattern', '')}"
     if name == "create_directory":
         return f"creating {args.get('path', '?')}"
     if name in ("git_init", "git_status", "git_add", "git_commit", "git_diff"):

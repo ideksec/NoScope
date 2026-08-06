@@ -12,7 +12,11 @@ from noscope.tools.safety import resolve_workspace_path
 
 class ReadFileTool(Tool):
     name = "read_file"
-    description = "Read the contents of a file within the workspace"
+    description = (
+        "Read the contents of a file within the workspace. For large files, "
+        "pass offset (1-based start line) and limit (line count) to read only "
+        "a window instead of the whole file."
+    )
     required_capability = Capability.WORKSPACE_RW
 
     def parameters_schema(self) -> dict[str, Any]:
@@ -20,6 +24,14 @@ class ReadFileTool(Tool):
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "File path relative to workspace"},
+                "offset": {
+                    "type": "integer",
+                    "description": "1-based line to start reading from (default: start of file)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to read (default: all)",
+                },
             },
             "required": ["path"],
         }
@@ -35,6 +47,21 @@ class ReadFileTool(Tool):
             content = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             return ToolResult.error(f"Cannot read binary file: {args['path']}")
+
+        offset = args.get("offset")
+        limit = args.get("limit")
+        if offset is not None or limit is not None:
+            lines = content.splitlines()
+            start = max(0, (int(offset) - 1)) if offset is not None else 0
+            end = start + int(limit) if limit is not None else len(lines)
+            window = lines[start:end]
+            display = "\n".join(window)
+            return ToolResult.ok(
+                display=display,
+                content=display,
+                path=str(path),
+                lines=f"{start + 1}-{start + len(window)} of {len(lines)}",
+            )
 
         return ToolResult.ok(display=content, content=content, path=str(path))
 

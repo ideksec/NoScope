@@ -139,3 +139,20 @@ class TestCreateDirectoryTool:
         result = await tool.execute({"path": "a/b/c"}, tool_context)
         assert result.status == "ok"
         assert (tool_context.workspace / "a/b/c").is_dir()
+
+
+@pytest.mark.asyncio
+class TestReadFilePartial:
+    async def test_offset_and_limit(self, tool_context: ToolContext) -> None:
+        (tool_context.workspace / "f.txt").write_text("l1\nl2\nl3\nl4\nl5\n")
+        tool = ReadFileTool()
+        result = await tool.execute({"path": "f.txt", "offset": 2, "limit": 2}, tool_context)
+        assert result.status == "ok"
+        assert result.data["content"] == "l2\nl3"
+        assert result.data["lines"] == "2-3 of 5"
+
+    async def test_full_read_unchanged(self, tool_context: ToolContext) -> None:
+        (tool_context.workspace / "f.txt").write_text("a\nb\n")
+        tool = ReadFileTool()
+        result = await tool.execute({"path": "f.txt"}, tool_context)
+        assert result.data["content"] == "a\nb\n"

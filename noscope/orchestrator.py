@@ -50,6 +50,7 @@ from noscope.tools.git import (
     GitInitTool,
     GitStatusTool,
 )
+from noscope.tools.search import FindFilesTool, SearchFilesTool
 from noscope.tools.shell import ShellTool, build_execution_env
 from noscope.ui.console import ConsoleUI
 
@@ -190,6 +191,8 @@ class Orchestrator:
                     EditFileTool(),
                     ListDirectoryTool(),
                     CreateDirectoryTool(),
+                    SearchFilesTool(),
+                    FindFilesTool(),
                     ShellTool(),
                     GitInitTool(),
                     GitStatusTool(),

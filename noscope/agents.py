@@ -239,7 +239,7 @@ class BuildAgent:
         for tc in tool_calls:
             if tc.name == "mark_task_complete":
                 virtual_calls.append(tc)
-            elif tc.name in ("read_file", "list_directory"):
+            elif tc.name in ("read_file", "list_directory", "search_files", "find_files"):
                 read_calls.append(tc)
             else:
                 # write_file, edit_file, create_directory, shell, git, ...

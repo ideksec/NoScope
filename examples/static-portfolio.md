@@ -8,6 +8,7 @@ constraints:
 acceptance:
   - "cmd: test -f index.html"
   - "cmd: test -f style.css"
+  - "cmd: grep -qi \"<!doctype html>\" index.html"
   - "Page has proper HTML5 structure"
 ---
 

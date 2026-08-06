@@ -40,6 +40,25 @@ NoScope takes a written specification, a fixed time limit, and explicit capabili
 
 ---
 
+## When to use NoScope
+
+NoScope is a **time-boxed proof-of-concept builder** — it turns a written spec
+into a runnable MVP inside a fixed budget, then hands you the artifact, a
+verification verdict, and a full event log. It's built to demonstrate what
+autonomous agents can do and to sculpt quick prototypes.
+
+**Reach for NoScope when** you want a runnable POC from a spec with a hard
+spend cap, an auditable record of every action, and an explicit permission
+gate — a self-contained, one-shot "spec in, MVP out" run.
+
+**Reach for something else when** you want to pair interactively on a codebase
+(use [Claude Code](https://claude.com/claude-code) or Cursor), or you want an
+open-ended cloud agent to own a ticket end-to-end (use a Devin-style agent).
+NoScope is deliberately one-shot and time-boxed; it is not an interactive
+editor or a long-running autonomous engineer.
+
+---
+
 ## Quick Start
 
 ### Installation
@@ -118,8 +137,8 @@ constraints:
   - "Use Flask or FastAPI"
   - "Use SQLite for storage"
 acceptance:
-  - "cmd: pip install -r requirements.txt"
-  - "cmd: python -c 'import app'"
+  - "cmd: python3 -m pip install -r requirements.txt"
+  - "cmd: python3 -c 'import app'"
   - "API supports CRUD operations for todos"
 ---
 
@@ -128,6 +147,24 @@ acceptance:
 Build a REST API for managing todo items with CRUD endpoints,
 SQLite persistence, and JSON request/response format.
 ```
+
+### Acceptance checks
+
+Each `acceptance` entry is either a `cmd:` check (run in the HARDEN phase) or a
+plain-language note (recorded in the handoff, not executed).
+
+- `cmd: <command>` — passes when the command exits `0`.
+- `cmd: <command> ==> <text>` — passes only when the command exits `0` **and**
+  its output contains `<text>`, so the check asserts real behavior rather than
+  just "the process started". For example:
+
+  ```yaml
+  acceptance:
+    - "cmd: python3 calc.py add 2 3 ==> 5"
+  ```
+
+If a `cmd:` check fails, HARDEN makes a bounded attempt to fix the cause and
+re-runs it before recording the result.
 
 See the [`examples/`](examples/) directory for more spec templates.
 

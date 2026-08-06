@@ -6,8 +6,8 @@ constraints:
   - "Use SQLite for storage"
   - "REST API only, no frontend"
 acceptance:
-  - "cmd: pip install -r requirements.txt"
-  - "cmd: python -c \"import app\""
+  - "cmd: python3 -m pip install -r requirements.txt"
+  - "cmd: python3 -c \"import app\""
   - "API supports CRUD operations for todos"
 ---
 

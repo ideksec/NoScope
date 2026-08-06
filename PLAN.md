@@ -238,7 +238,7 @@ core of "you always get a runnable artifact," and the most demo-visible upgrade.
       `confirm_running` tool and the harness runs it, accepting the verdict only
       if it really passes. (Stronger than a self-reported structured verdict —
       the check is executed, not asserted.)
-- [ ] HARDEN gains a bounded repair loop (budgeted by the phase deadline):
+- [x] HARDEN gains a bounded repair loop (budgeted by the phase deadline):
       failing check → targeted fix session → re-run check.
 - [ ] Turn the audit agent into a real checker: run lint/build/import checks
       via the cheap fast model and feed findings back through the existing

@@ -17,7 +17,7 @@ from noscope.llm.base import (
     Usage,
 )
 
-DEFAULT_MODEL = "claude-sonnet-4-20250514"
+DEFAULT_MODEL = "claude-sonnet-5"
 
 
 class AnthropicProvider:

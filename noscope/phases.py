@@ -22,7 +22,6 @@ from noscope.tools.dispatcher import ToolDispatcher
 if TYPE_CHECKING:
     from noscope.ui.console import ConsoleUI
 
-MAX_BUILD_ITERATIONS = 200
 MAX_VERIFY_ITERATIONS = 50
 
 
@@ -215,6 +214,7 @@ class VerifyPhase:
         tokens: TokenTracker | None = None,
     ) -> tuple[bool, str]:
         """Returns (success, message)."""
+        deadline.advance_phase(Phase.VERIFY)
         event_log.emit(
             phase=Phase.VERIFY.value,
             event_type="verify.start",

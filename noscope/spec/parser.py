@@ -35,13 +35,25 @@ def parse_spec(path: Path) -> SpecInput:
         raise ValueError("'acceptance' must be a list")
     acceptance = [AcceptanceCheck.from_string(a) for a in raw_acceptance]
 
+    stack_prefs = meta.get("stack_prefs")
+    if stack_prefs is not None and not isinstance(stack_prefs, list):
+        raise ValueError("'stack_prefs' must be a list")
+
+    repo_mode = meta.get("repo_mode", "new")
+    if repo_mode not in ("new", "existing"):
+        raise ValueError("'repo_mode' must be 'new' or 'existing'")
+
+    risk_policy = meta.get("risk_policy", "default")
+    if risk_policy not in ("strict", "default", "permissive"):
+        raise ValueError("'risk_policy' must be 'strict', 'default', or 'permissive'")
+
     return SpecInput(
         name=str(name),
         timebox=str(timebox),
         constraints=[str(c) for c in constraints],
         acceptance=acceptance,
         body=post.content,
-        stack_prefs=meta.get("stack_prefs"),
-        repo_mode=meta.get("repo_mode", "new"),
-        risk_policy=meta.get("risk_policy", "default"),
+        stack_prefs=[str(s) for s in stack_prefs] if stack_prefs is not None else None,
+        repo_mode=repo_mode,
+        risk_policy=risk_policy,
     )

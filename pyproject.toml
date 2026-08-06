@@ -26,8 +26,8 @@ dependencies = [
     "pydantic-settings",
     "python-dotenv",
     "pyyaml",
-    "anthropic",
-    "openai",
+    "anthropic>=0.80",
+    "openai>=2.21",
     "python-frontmatter",
 ]
 
@@ -37,7 +37,6 @@ Repository = "https://github.com/ideksec/NoScope"
 Issues = "https://github.com/ideksec/NoScope/issues"
 
 [project.optional-dependencies]
-tui = ["textual>=1.0"]
 dev = ["pytest", "pytest-asyncio", "ruff", "mypy", "pytest-cov"]
 
 [project.scripts]

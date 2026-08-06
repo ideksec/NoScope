@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from pydantic import ValidationError
+
 from noscope.llm.base import LLMProvider, Message
 from noscope.planning.models import PlanOutput
 from noscope.spec.models import SpecInput
@@ -106,7 +108,7 @@ Spec body:
 
             data = json.loads(raw)
             return PlanOutput.model_validate(data)
-        except (json.JSONDecodeError, Exception) as e:
+        except (json.JSONDecodeError, ValidationError) as e:
             last_error = e
             if attempt < max_retries:
                 messages.append(Message(role="assistant", content=response.content))

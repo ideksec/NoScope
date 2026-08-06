@@ -13,6 +13,27 @@ from noscope import __version__
 from noscope.capabilities import CapabilityRequest
 from noscope.deadline import Deadline, Phase
 
+# Pricing per million tokens (input, output) — approximate, as of August 2026.
+# Unknown models get no estimate rather than a silently wrong one.
+MODEL_PRICING: dict[str, tuple[float, float]] = {
+    "claude-sonnet-5": (3.0, 15.0),
+    "claude-opus-5": (5.0, 25.0),
+    "claude-haiku-4-5": (1.0, 5.0),
+    "claude-haiku-4-5-20251001": (1.0, 5.0),
+    "gpt-5.6-sol": (5.0, 30.0),
+    "gpt-5.6-terra": (2.5, 15.0),
+    "gpt-5.6-luna": (0.10, 0.60),
+}
+
+
+def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float | None:
+    """Estimated run cost in USD, or None when the model's pricing is unknown."""
+    prices = MODEL_PRICING.get(model)
+    if prices is None:
+        return None
+    input_price, output_price = prices
+    return (input_tokens / 1_000_000 * input_price) + (output_tokens / 1_000_000 * output_price)
+
 
 class ConsoleUI:
     """Rich-powered console output for NoScope runs."""
@@ -84,17 +105,6 @@ class ConsoleUI:
 
         self.console.print(table)
 
-    def panic_warning(self) -> None:
-        self.console.print(
-            Panel(
-                "[bold]PANIC MODE ACTIVATED[/bold]\n"
-                "Time is running low. Stopping new features.\n"
-                "Focusing on making the demo runnable.",
-                border_style="red",
-                style="red",
-            )
-        )
-
     def danger_warning(self) -> None:
         self.console.print(
             Panel(
@@ -138,25 +148,6 @@ class ConsoleUI:
                     border_style="red",
                 )
             )
-
-    def cost_summary(
-        self, input_tokens: int, output_tokens: int, provider: str, model: str
-    ) -> None:
-        """Show estimated cost of the run."""
-        # Pricing per million tokens (approximate, as of 2025)
-        pricing: dict[str, tuple[float, float]] = {
-            "claude-sonnet-4-20250514": (3.0, 15.0),
-            "claude-haiku-4-5-20251001": (0.80, 4.0),
-            "gpt-4o": (2.50, 10.0),
-            "gpt-4o-mini": (0.15, 0.60),
-        }
-        input_price, output_price = pricing.get(model, (3.0, 15.0))
-        cost = (input_tokens / 1_000_000 * input_price) + (output_tokens / 1_000_000 * output_price)
-
-        self.console.print(
-            f"\n  [dim]Tokens: {input_tokens:,} in / {output_tokens:,} out "
-            f"| Estimated cost: ${cost:.4f} ({provider}/{model})[/dim]"
-        )
 
     def launch_app(self, workspace: Path, command: str, url: str) -> None:
         """Show that the app is being launched for the user."""
@@ -223,15 +214,16 @@ class ConsoleUI:
         lines.append(f"  Event log:   [cyan]{run_dir / 'events.jsonl'}[/cyan]")
 
         # Cost
-        pricing: dict[str, tuple[float, float]] = {
-            "claude-sonnet-4-20250514": (3.0, 15.0),
-            "claude-haiku-4-5-20251001": (0.80, 4.0),
-            "gpt-4o": (2.50, 10.0),
-            "gpt-4o-mini": (0.15, 0.60),
-        }
-        input_price, output_price = pricing.get(model, (3.0, 15.0))
-        cost = (input_tokens / 1_000_000 * input_price) + (output_tokens / 1_000_000 * output_price)
-        lines.append(f"  Cost:        ${cost:.4f} ({input_tokens:,} in / {output_tokens:,} out)")
+        cost = estimate_cost(model, input_tokens, output_tokens)
+        if cost is not None:
+            lines.append(
+                f"  Cost:        ${cost:.4f} ({input_tokens:,} in / {output_tokens:,} out)"
+            )
+        else:
+            lines.append(
+                f"  Cost:        unknown pricing for {model} "
+                f"({input_tokens:,} in / {output_tokens:,} out)"
+            )
 
         self.console.print(
             Panel(

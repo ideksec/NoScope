@@ -17,7 +17,15 @@ from noscope.llm.base import (
     Usage,
 )
 
-DEFAULT_MODEL = "gpt-4o"
+DEFAULT_MODEL = "gpt-5.6-terra"
+
+# Normalize OpenAI finish reasons to the Anthropic-style stop reasons the
+# agent loops branch on (they exit on "end_turn", never on OpenAI's "stop").
+_STOP_REASON_MAP = {
+    "stop": "end_turn",
+    "tool_calls": "tool_use",
+    "length": "max_tokens",
+}
 
 
 class OpenAIProvider:
@@ -66,11 +74,12 @@ class OpenAIProvider:
                 output_tokens=response.usage.completion_tokens,
             )
 
+        finish_reason = choice.finish_reason or ""
         return LLMResponse(
             content=msg.content or "",
             tool_calls=tool_calls,
             usage=usage,
-            stop_reason=choice.finish_reason or "",
+            stop_reason=_STOP_REASON_MAP.get(finish_reason, finish_reason),
         )
 
     async def stream(

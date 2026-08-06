@@ -87,7 +87,7 @@ uv run noscope new
 ```
 ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐
 │  PLAN   │───▶│ REQUEST │───▶│  BUILD  │───▶│ HARDEN  │───▶│ VERIFY  │───▶│ HANDOFF │
-│  (10%)  │    │  (user) │    │  (50%)  │    │  (25%)  │    │  (10%)  │    │  (5%)   │
+│  (5%)   │    │  (user) │    │  (65%)  │    │  (10%)  │    │  (15%)  │    │  (5%)   │
 └─────────┘    └─────────┘    └─────────┘    └─────────┘    └─────────┘    └─────────┘
  Generate       Approve        Execute        Run tests      Confirm        Generate
  task plan      capabilities   the plan       & validate     MVP runs       report
@@ -138,7 +138,7 @@ See the [`examples/`](examples/) directory for more spec templates.
 ```
 uv run noscope run --spec <path> --time <duration> --dir <output>
     [--provider anthropic|openai] [--model <model>]
-    [--sandbox] [--danger] [--yes] [--tui]
+    [--sandbox] [--danger] [--yes] [--serve]
 
 uv run noscope new             # Create and run a project interactively
 uv run noscope doctor          # Check environment and API keys
@@ -151,10 +151,11 @@ uv run noscope init            # Create a spec file template
 | `--time`, `-t` | Timebox duration (e.g., `5m`, `1h`, `30m`) |
 | `--dir`, `-d` | Output directory for the built project |
 | `--provider`, `-p` | LLM provider: `anthropic` or `openai` |
-| `--model`, `-m` | Model override (e.g., `claude-sonnet-4-20250514`, `gpt-4o`) |
+| `--model`, `-m` | Model override (e.g., `claude-sonnet-5`, `gpt-5.6-terra`) |
 | `--sandbox` | Run agent commands inside a Docker container |
 | `--danger` | Bypass safety filters (use only with trusted specs) |
 | `--yes`, `-y` | Auto-approve all capability requests |
+| `--serve` | After a verified build, launch the app and stream output (blocks until Ctrl+C) |
 
 ---
 

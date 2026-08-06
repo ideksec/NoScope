@@ -39,20 +39,20 @@ uv run noscope run --spec examples/hello-flask.md --time 5m --dir /tmp/out --yes
 |---|---|
 | `noscope/cli.py` | Typer CLI entry point |
 | `noscope/orchestrator.py` | Main run lifecycle — wires all phases |
-| `noscope/phases.py` | Phase implementations (Plan/Request/Build/Harden/Handoff) |
-| `noscope/deadline.py` | Timebox engine with phase budgets and panic mode |
+| `noscope/phases.py` | Phase implementations (Plan/Request/Build/Harden/Verify/Handoff) |
+| `noscope/deadline.py` | Timebox engine with phase budgets |
 | `noscope/capabilities.py` | Capability model — gates all agent actions |
 | `noscope/tools/` | Agent tools (filesystem, shell, git, docker) |
 | `noscope/llm/` | LLM provider abstraction (Anthropic + OpenAI) |
 | `noscope/spec/` | Spec parsing (Markdown + YAML frontmatter) and contracts |
 | `noscope/logging/events.py` | JSONL event log |
 | `noscope/config/settings.py` | Pydantic BaseSettings from env vars / .env |
-| `noscope/ui/` | Rich console output and Textual TUI |
+| `noscope/ui/` | Rich console output |
 
 ### Execution flow
 
 ```
-parse_spec → Deadline → PLAN (LLM) → REQUEST (user approval) → BUILD (agent loop) → HARDEN (acceptance checks) → HANDOFF (report)
+parse_spec → Deadline → PLAN (LLM) → REQUEST (user approval) → BUILD (agent loop) → HARDEN (acceptance checks) → VERIFY (run the MVP) → HANDOFF (report)
 ```
 
 The HANDOFF phase always runs, even on error.

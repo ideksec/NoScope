@@ -12,11 +12,13 @@
 
 NoScope takes a written specification, a fixed time limit, and explicit capability grants, then autonomously plans, builds, and validates a working software prototype. When the timer runs out, you always get a runnable artifact and a handoff report — never a hanging process or a surprise bill.
 
+> **Deep dives:** [`ARCHITECTURE.md`](ARCHITECTURE.md) — how it works and why (with diagrams) · [`PLAN.md`](PLAN.md) — the design audit and the build-our-own-harness-vs-wrap-the-SDK decision · [`CHANGELOG.md`](CHANGELOG.md)
+
 ---
 
 ## Why NoScope?
 
-40% of agentic AI projects get cancelled due to cost overruns. NoScope's timebox is a spend-cap guarantee — when time's up, you get a result, not a bill.
+Gartner projects that [over 40% of agentic AI projects will be scrapped by 2027](https://www.gartner.com/en/newsroom/press-releases/2025-06-25-gartner-predicts-over-40-percent-of-agentic-ai-projects-will-be-canceled-by-end-of-2027), citing cost and unclear value among the causes. NoScope's timebox is a spend-cap guarantee — when time's up, you get a result, not a bill.
 
 | | Traditional Agent | NoScope |
 |---|---|---|
@@ -125,6 +127,43 @@ The **HANDOFF** phase always runs, even if the build fails — you always get a 
 
 ---
 
+## Design highlights
+
+The interesting engineering is in how the "always terminate, always produce
+output" guarantee is enforced. A few decisions worth a closer look
+([`ARCHITECTURE.md`](ARCHITECTURE.md) has the full picture):
+
+- **Verification executes, it doesn't trust.** The failure mode to avoid is a
+  confident model declaring success on a broken build. HARDEN passes a check
+  only if the command *actually* exits 0 and its output matches; VERIFY makes
+  the agent propose a proof command (`curl -sf localhost:5000`) and the harness
+  *runs it* — the verdict is grounded in a real command every time. A failing
+  check triggers a bounded auto-repair, then re-runs.
+
+- **Two spend caps: time and tokens.** A cooperative wall-clock `Deadline`
+  gives every agent loop a cheap per-iteration check so it winds down and the
+  pipeline still reaches HANDOFF; an optional `--token-budget` caps spend in
+  tokens the same way. The product's promise is a spend guarantee — enforced in
+  both dimensions.
+
+- **Parallel build with dependency-aware partitioning.** A supervisor splits
+  setup into concurrent structure + deps agents, then partitions the remaining
+  tasks with union-find over the dependency graph (+ topological sort) so
+  transitively-dependent work lands on one worker and cycles can't hang. A
+  concurrent audit agent feeds corrections back into workers mid-build.
+
+- **Capability-gated, typed tools over raw bash.** Every action is a typed tool
+  that can be permission-gated, path-checked against the workspace, logged, and
+  secret-redacted — including an `edit_file` whose uniqueness guard *fails* on
+  an ambiguous match instead of editing the wrong region.
+
+- **A thin, modern LLM layer.** Structured outputs, prompt caching (with
+  cache-savings reporting), adaptive thinking/effort with graceful degradation,
+  and SDK-native retries — kept small on purpose so a model/API change is a
+  one-line default, not a refactor.
+
+---
+
 ## Spec Format
 
 Write your spec as Markdown with YAML frontmatter:
@@ -208,6 +247,21 @@ Every run produces a structured output in `.noscope/runs/<run_id>/`:
   capabilities_grant.json   # What capabilities were approved
   handoff.md                # Final report (always generated, even on failure)
 ```
+
+The **event log** is append-only JSONL — every action is reconstructable after
+the fact (secrets redacted, bulky fields trimmed):
+
+```jsonl
+{"ts":"2026-08-06T18:22:01Z","phase":"BUILD","seq":42,"type":"tool.write_file","summary":"Calling write_file","data":{"tool":"write_file","args":{"path":"app.py"}}}
+{"ts":"2026-08-06T18:22:07Z","phase":"BUILD","seq":58,"type":"task.complete","summary":"[worker-0] Task t2: CRUD endpoints","data":{"task_id":"t2","agent_id":"worker-0"}}
+{"ts":"2026-08-06T18:23:14Z","phase":"HARDEN","seq":71,"type":"acceptance.check","summary":"✓ cmd: python3 -c 'import app'","result":{"passed":true,"reason":""}}
+{"ts":"2026-08-06T18:23:40Z","phase":"VERIFY","seq":80,"type":"verify.pass","summary":"MVP verified (independently confirmed): responds on / with the todo list"}
+```
+
+The **handoff report** (`handoff.md`) is written even if the build fails — it
+records the contract, what was built, exact run commands, the pass/fail table,
+and known gaps. See the [Run Outputs section of `ARCHITECTURE.md`](ARCHITECTURE.md#observability)
+for the full model.
 
 ---
 

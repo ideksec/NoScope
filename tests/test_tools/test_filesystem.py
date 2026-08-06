@@ -7,10 +7,71 @@ import pytest
 from noscope.tools.base import ToolContext
 from noscope.tools.filesystem import (
     CreateDirectoryTool,
+    EditFileTool,
     ListDirectoryTool,
     ReadFileTool,
     WriteFileTool,
 )
+
+
+@pytest.mark.asyncio
+class TestEditFileTool:
+    async def test_unique_replacement(self, tool_context: ToolContext) -> None:
+        (tool_context.workspace / "app.py").write_text("x = 1\ny = 2\n")
+        tool = EditFileTool()
+        result = await tool.execute(
+            {"path": "app.py", "old_string": "x = 1", "new_string": "x = 42"}, tool_context
+        )
+        assert result.status == "ok"
+        assert result.data["replacements"] == 1
+        assert (tool_context.workspace / "app.py").read_text() == "x = 42\ny = 2\n"
+
+    async def test_missing_old_string(self, tool_context: ToolContext) -> None:
+        (tool_context.workspace / "app.py").write_text("hello\n")
+        tool = EditFileTool()
+        result = await tool.execute(
+            {"path": "app.py", "old_string": "nope", "new_string": "x"}, tool_context
+        )
+        assert result.status == "error"
+        assert "not found" in result.display
+
+    async def test_ambiguous_match_rejected(self, tool_context: ToolContext) -> None:
+        (tool_context.workspace / "app.py").write_text("a\na\n")
+        tool = EditFileTool()
+        result = await tool.execute(
+            {"path": "app.py", "old_string": "a", "new_string": "b"}, tool_context
+        )
+        assert result.status == "error"
+        assert "appears 2 times" in result.display
+        # File is left untouched on an ambiguous match
+        assert (tool_context.workspace / "app.py").read_text() == "a\na\n"
+
+    async def test_replace_all(self, tool_context: ToolContext) -> None:
+        (tool_context.workspace / "app.py").write_text("a\na\na\n")
+        tool = EditFileTool()
+        result = await tool.execute(
+            {"path": "app.py", "old_string": "a", "new_string": "b", "replace_all": True},
+            tool_context,
+        )
+        assert result.status == "ok"
+        assert result.data["replacements"] == 3
+        assert (tool_context.workspace / "app.py").read_text() == "b\nb\nb\n"
+
+    async def test_nonexistent_file(self, tool_context: ToolContext) -> None:
+        tool = EditFileTool()
+        result = await tool.execute(
+            {"path": "ghost.py", "old_string": "a", "new_string": "b"}, tool_context
+        )
+        assert result.status == "error"
+        assert "not found" in result.display
+
+    async def test_noop_edit_rejected(self, tool_context: ToolContext) -> None:
+        (tool_context.workspace / "app.py").write_text("same\n")
+        tool = EditFileTool()
+        result = await tool.execute(
+            {"path": "app.py", "old_string": "same", "new_string": "same"}, tool_context
+        )
+        assert result.status == "error"
 
 
 @pytest.mark.asyncio

@@ -38,6 +38,7 @@ from noscope.tools.docker import (
 )
 from noscope.tools.filesystem import (
     CreateDirectoryTool,
+    EditFileTool,
     ListDirectoryTool,
     ReadFileTool,
     WriteFileTool,
@@ -186,6 +187,7 @@ class Orchestrator:
                 [
                     ReadFileTool(),
                     WriteFileTool(),
+                    EditFileTool(),
                     ListDirectoryTool(),
                     CreateDirectoryTool(),
                     ShellTool(),

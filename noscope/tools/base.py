@@ -63,6 +63,8 @@ def tool_summary(name: str, args: dict[str, Any]) -> str:
     """Create a brief human-readable summary of a tool call."""
     if name == "write_file":
         return f"writing {args.get('path', '?')}"
+    if name == "edit_file":
+        return f"editing {args.get('path', '?')}"
     if name == "read_file":
         return f"reading {args.get('path', '?')}"
     if name == "exec_command":

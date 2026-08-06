@@ -1,7 +1,8 @@
-"""Filesystem tools — read, write, list, mkdir within workspace."""
+"""Filesystem tools — read, write, edit, list, mkdir within workspace."""
 
 from __future__ import annotations
 
+import difflib
 from typing import Any
 
 from noscope.capabilities import Capability
@@ -58,6 +59,99 @@ class WriteFileTool(Tool):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(args["content"], encoding="utf-8")
         return ToolResult.ok(display=f"Wrote {path}", path=str(path))
+
+
+class EditFileTool(Tool):
+    name = "edit_file"
+    description = (
+        "Edit an existing file by replacing an exact string. Prefer this over "
+        "write_file for changes to existing files — it only touches the target "
+        "region and returns a diff. old_string must match exactly (including "
+        "whitespace and indentation) and must be unique in the file unless "
+        "replace_all is true."
+    )
+    required_capability = Capability.WORKSPACE_RW
+
+    def parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path relative to workspace"},
+                "old_string": {
+                    "type": "string",
+                    "description": "Exact text to replace (include enough context to be unique)",
+                },
+                "new_string": {
+                    "type": "string",
+                    "description": "Replacement text",
+                },
+                "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace every occurrence instead of requiring a unique match",
+                    "default": False,
+                },
+            },
+            "required": ["path", "old_string", "new_string"],
+        }
+
+    async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        path = resolve_workspace_path(args["path"], context.workspace)
+        if not path.exists():
+            return ToolResult.error(f"File not found: {args['path']}")
+        if not path.is_file():
+            return ToolResult.error(f"Not a file: {args['path']}")
+
+        old_string = args["old_string"]
+        new_string = args["new_string"]
+        replace_all = bool(args.get("replace_all", False))
+
+        if old_string == new_string:
+            return ToolResult.error("old_string and new_string are identical — nothing to do")
+
+        try:
+            original = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return ToolResult.error(f"Cannot edit binary file: {args['path']}")
+
+        count = original.count(old_string)
+        if count == 0:
+            return ToolResult.error(
+                f"old_string not found in {args['path']} — it must match exactly, "
+                "including whitespace and indentation"
+            )
+        if count > 1 and not replace_all:
+            return ToolResult.error(
+                f"old_string appears {count} times in {args['path']}; add surrounding "
+                "context to make it unique, or set replace_all to replace every occurrence"
+            )
+
+        updated = original.replace(old_string, new_string)
+        path.write_text(updated, encoding="utf-8")
+
+        diff = _unified_diff(original, updated, args["path"])
+        replaced = count if replace_all else 1
+        return ToolResult.ok(
+            display=f"Edited {args['path']} ({replaced} replacement(s))\n{diff}",
+            path=str(path),
+            replacements=replaced,
+        )
+
+
+def _unified_diff(before: str, after: str, path: str) -> str:
+    """A compact unified diff, capped so large edits don't flood the context."""
+    lines = list(
+        difflib.unified_diff(
+            before.splitlines(),
+            after.splitlines(),
+            fromfile=path,
+            tofile=path,
+            lineterm="",
+            n=2,
+        )
+    )
+    if len(lines) > 60:
+        lines = lines[:60] + ["... (diff truncated)"]
+    return "\n".join(lines)
 
 
 class ListDirectoryTool(Tool):

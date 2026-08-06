@@ -249,14 +249,17 @@ core of "you always get a runnable artifact," and the most demo-visible upgrade.
 
 ### Phase 4 — Release readiness
 
-- [ ] Positioning rewrite in README: "timebox as spend cap + capability gating
-      + auditable one-shot runs" vs. interactive agents (Claude Code) and
-      open-ended cloud agents (Devin) — with honest "when NOT to use NoScope".
-- [ ] Real cost reporting (cached vs. uncached, per phase, per agent) — make
-      the cost-control pitch demonstrable in the handoff report.
-- [ ] Fresh example specs that exercise current stacks; CI smoke test that
-      runs a 3-minute spec end-to-end against the live API (nightly, keyed).
-- [ ] Version 0.2.0, CHANGELOG, and a release checklist.
+- [x] Positioning: README "When to use NoScope" section — POC-from-spec with a
+      spend cap and audit trail vs. interactive agents (Claude Code/Cursor) and
+      open-ended cloud agents (Devin), with an honest "reach for something else
+      when".
+- [x] Real cost reporting: cached vs. uncached tokens and dollars-saved in the
+      final summary; token totals (incl. cache) in the `run.complete` event.
+      (Per-phase/per-agent attribution not yet broken out.)
+- [x] Fresh example specs on current stacks (`python3`, expected-output checks).
+      A live end-to-end smoke test is documented in `RELEASE.md` (manual — no
+      API key in CI); a keyed nightly CI job is still open.
+- [x] Version 0.2.0, `CHANGELOG.md`, and a `RELEASE.md` checklist.
 
 ## 5. Explicit cuts
 

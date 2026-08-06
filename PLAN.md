@@ -182,7 +182,7 @@ Goal: `main` runs again on today's APIs. No re-architecture.
 ### Phase 1 — Modernize the LLM usage (still current architecture)
 
 Goal: the existing loop stops leaving free wins on the table. Everything here
-survives the Phase 2 re-architecture (planner, prompts, verification design).
+carries into the later phases (planner, prompts, verification design).
 
 - [x] Planner: structured outputs (`output_config.format` from
       `PlanOutput.model_json_schema()`, prepared with `additionalProperties:
@@ -211,10 +211,10 @@ are reliable enough to demo. Every tool is ours, tested, and capability-gated.
 - [x] `edit_file` — exact-string replacement with a uniqueness guard and a
       returned diff, replacing whole-file rewrites for edits. Mutations now run
       sequentially so same-file edits can't race.
-- [ ] Search + discovery tools: `search_files` (regex/grep across the tree) and
+- [x] Search + discovery tools: `search_files` (regex/grep across the tree) and
       `find_files` (glob) so agents stop discovering code one `list_directory`
       at a time.
-- [ ] Partial reads: `read_file` gains optional line `offset`/`limit` so large
+- [x] Partial reads: `read_file` gains optional line `offset`/`limit` so large
       files don't dump whole into context.
 - [ ] Docker sandbox correctness (from §2.3/§2.4): fix the heredoc write
       corruption and path injection, validate paths, use an image with the

@@ -230,12 +230,14 @@ are reliable enough to demo. Every tool is ours, tested, and capability-gated.
 Goal: replace model-as-oracle with independent checks — this is the credibility
 core of "you always get a runnable artifact," and the most demo-visible upgrade.
 
-- [ ] Acceptance checks: keep `cmd:` checks but add expected-output assertions
-      (`cmd: ... expect: <substring|status>`); run them from code, not prompts.
-- [ ] Replace the `VERIFIED:` sentinel-string protocol with a structured
-      verdict (structured output schema: status, evidence, failures) from a
-      fresh-context verifier that did not build the code. (Structured outputs
-      from Phase 1 make this clean.)
+- [x] Acceptance checks: `cmd:` checks now assert expected output
+      (`cmd: <command> ==> <substring>` and a plan `expect_output` field); run
+      from code in HARDEN, not prompts. Exit-0 alone no longer counts as a pass.
+- [x] Replace the `VERIFIED:` sentinel-string protocol with independent
+      confirmation: the verify agent proposes a proof command via a
+      `confirm_running` tool and the harness runs it, accepting the verdict only
+      if it really passes. (Stronger than a self-reported structured verdict —
+      the check is executed, not asserted.)
 - [ ] HARDEN gains a bounded repair loop (budgeted by the phase deadline):
       failing check → targeted fix session → re-run check.
 - [ ] Turn the audit agent into a real checker: run lint/build/import checks

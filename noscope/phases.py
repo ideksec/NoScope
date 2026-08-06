@@ -146,18 +146,18 @@ class HardenPhase:
 
         results: list[dict[str, Any]] = []
 
-        # Collect all cmd: checks from spec and plan
-        checks: list[tuple[str, str]] = []
+        # Collect all cmd: checks from spec and plan as (name, cmd, expect).
+        checks: list[tuple[str, str, str | None]] = []
 
         for ac in spec.acceptance:
             if ac.is_cmd and ac.command:
-                checks.append((ac.raw, ac.command))
+                checks.append((ac.raw, ac.command, ac.expect))
 
         for ap in plan.acceptance_plan:
             if ap.cmd:
-                checks.append((ap.name, ap.cmd))
+                checks.append((ap.name, ap.cmd, ap.expect_output))
 
-        for name, cmd in checks:
+        for name, cmd, expect in checks:
             if deadline.is_expired() or deadline.should_transition(Phase.HARDEN):
                 results.append({"name": name, "cmd": cmd, "passed": False, "skipped": True})
                 continue
@@ -168,12 +168,27 @@ class HardenPhase:
             result = await dispatcher.dispatch(
                 "exec_command", {"command": cmd, "timeout": 30}, context
             )
-            passed = result.status == "ok"
+            exit_ok = result.status == "ok"
+            # A check passes only if the command succeeds AND, when an expected
+            # output is given, that text actually appears — so a check asserts
+            # behavior rather than just "the process started".
+            output_ok = expect is None or expect in result.display
+            passed = exit_ok and output_ok
+
+            if not exit_ok:
+                reason = "command failed"
+            elif not output_ok:
+                reason = f"expected output not found: {expect!r}"
+            else:
+                reason = ""
+
             results.append(
                 {
                     "name": name,
                     "cmd": cmd,
+                    "expect": expect,
                     "passed": passed,
+                    "reason": reason,
                     "output": result.display[:1000],
                 }
             )
@@ -181,9 +196,9 @@ class HardenPhase:
             event_log.emit(
                 phase=Phase.HARDEN.value,
                 event_type="acceptance.check",
-                summary=f"{'✓' if passed else '✗'} {name}",
-                data={"name": name, "cmd": cmd},
-                result={"passed": passed},
+                summary=f"{'✓' if passed else '✗'} {name}" + (f" ({reason})" if reason else ""),
+                data={"name": name, "cmd": cmd, "expect": expect},
+                result={"passed": passed, "reason": reason},
             )
 
         event_log.emit(

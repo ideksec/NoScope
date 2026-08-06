@@ -8,18 +8,31 @@ from pydantic import BaseModel, field_validator
 
 
 class AcceptanceCheck(BaseModel):
-    """A single acceptance criterion from the spec."""
+    """A single acceptance criterion from the spec.
+
+    A ``cmd:`` check passes when the command exits 0. Append ``==> <text>`` to
+    also require that ``<text>`` appears in the command's output, e.g.::
+
+        cmd: curl -s localhost:5000 ==> Hello
+    """
 
     raw: str
     is_cmd: bool = False
     command: str | None = None
+    expect: str | None = None
 
     @classmethod
     def from_string(cls, s: str) -> AcceptanceCheck:
         s = s.strip()
         if s.lower().startswith("cmd:"):
-            cmd = s[4:].strip()
-            return cls(raw=s, is_cmd=True, command=cmd)
+            body = s[4:].strip()
+            command, _, expect = body.partition("==>")
+            return cls(
+                raw=s,
+                is_cmd=True,
+                command=command.strip(),
+                expect=expect.strip() or None,
+            )
         return cls(raw=s)
 
 

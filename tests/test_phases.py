@@ -8,9 +8,58 @@ import pytest
 
 from noscope.deadline import Deadline
 from noscope.logging.events import EventLog, RunDir
-from noscope.phases import HandoffPhase, RequestPhase
-from noscope.planning.models import PlanOutput, PlanTask
+from noscope.phases import HandoffPhase, HardenPhase, RequestPhase
+from noscope.planning.models import AcceptancePlan, PlanOutput, PlanTask
 from noscope.spec.models import SpecInput
+from noscope.tools.base import ToolContext
+from noscope.tools.dispatcher import ToolDispatcher
+from noscope.tools.shell import ShellTool
+
+
+@pytest.mark.asyncio
+class TestHardenPhase:
+    """HARDEN runs real shell commands — no LLM, so these assert real behavior."""
+
+    def _dispatcher(self) -> ToolDispatcher:
+        d = ToolDispatcher()
+        d.register(ShellTool())
+        return d
+
+    async def test_exit_code_pass_and_fail(
+        self, tool_context: ToolContext, event_log: EventLog
+    ) -> None:
+        plan = PlanOutput(
+            acceptance_plan=[
+                AcceptancePlan(name="ok", cmd="true"),
+                AcceptancePlan(name="bad", cmd="false"),
+            ]
+        )
+        spec = SpecInput(name="T", timebox="5m")
+        results = await HardenPhase().run(
+            plan, spec, self._dispatcher(), tool_context, event_log, tool_context.deadline
+        )
+        by_name = {r["name"]: r for r in results}
+        assert by_name["ok"]["passed"] is True
+        assert by_name["bad"]["passed"] is False
+
+    async def test_expected_output_enforced(
+        self, tool_context: ToolContext, event_log: EventLog
+    ) -> None:
+        plan = PlanOutput(
+            acceptance_plan=[
+                AcceptancePlan(name="match", cmd="echo hello world", expect_output="hello"),
+                AcceptancePlan(name="nomatch", cmd="echo goodbye", expect_output="hello"),
+            ]
+        )
+        spec = SpecInput(name="T", timebox="5m")
+        results = await HardenPhase().run(
+            plan, spec, self._dispatcher(), tool_context, event_log, tool_context.deadline
+        )
+        by_name = {r["name"]: r for r in results}
+        # Command exits 0 both times; only the one whose output matches passes.
+        assert by_name["match"]["passed"] is True
+        assert by_name["nomatch"]["passed"] is False
+        assert "expected output not found" in by_name["nomatch"]["reason"]
 
 
 @pytest.mark.asyncio

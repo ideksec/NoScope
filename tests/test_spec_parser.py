@@ -51,6 +51,16 @@ class TestAcceptanceCheck:
         assert ac.is_cmd is True
         assert ac.command == "echo hello"
 
+    def test_expected_output(self) -> None:
+        ac = AcceptanceCheck.from_string("cmd: curl -s localhost:5000 ==> Hello")
+        assert ac.is_cmd is True
+        assert ac.command == "curl -s localhost:5000"
+        assert ac.expect == "Hello"
+
+    def test_no_expected_output(self) -> None:
+        ac = AcceptanceCheck.from_string("cmd: pytest -q")
+        assert ac.expect is None
+
 
 class TestParseSpec:
     def test_valid_spec(self, sample_spec_path: Path) -> None:

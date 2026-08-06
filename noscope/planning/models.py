@@ -27,6 +27,9 @@ class AcceptancePlan(BaseModel):
     name: str
     cmd: str | None = None
     must_pass: bool = True
+    # Optional substring the command's output must contain to pass (in addition
+    # to exiting 0). Lets a check assert real behavior, not just "it started".
+    expect_output: str | None = None
 
 
 class PlanOutput(BaseModel):

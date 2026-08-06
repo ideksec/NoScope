@@ -26,15 +26,38 @@ MAX_VERIFY_ITERATIONS = 50
 
 
 class TokenTracker:
-    """Accumulates token usage across all LLM calls."""
+    """Accumulates token usage across all LLM calls.
 
-    def __init__(self) -> None:
+    An optional ``budget`` (total tokens) turns the tracker into a spend cap:
+    once total usage reaches the budget, ``exceeded()`` is true and the agent
+    loops stop — the token analog of the wall-clock deadline.
+    """
+
+    def __init__(self, budget: int | None = None) -> None:
         self.input_tokens = 0
         self.output_tokens = 0
+        self.cache_creation_input_tokens = 0
+        self.cache_read_input_tokens = 0
+        self.budget = budget
 
     def add(self, usage: Usage) -> None:
         self.input_tokens += usage.input_tokens
         self.output_tokens += usage.output_tokens
+        self.cache_creation_input_tokens += usage.cache_creation_input_tokens
+        self.cache_read_input_tokens += usage.cache_read_input_tokens
+
+    def total(self) -> int:
+        """All tokens processed (prompt, cached, and output)."""
+        return (
+            self.input_tokens
+            + self.output_tokens
+            + self.cache_creation_input_tokens
+            + self.cache_read_input_tokens
+        )
+
+    def exceeded(self) -> bool:
+        """True once a budget is set and total usage has reached it."""
+        return self.budget is not None and self.total() >= self.budget
 
 
 class PlanPhase:
@@ -124,8 +147,12 @@ class RequestPhase:
         return Confirm.ask("    Approve?", default=True)
 
 
+MAX_HARDEN_REPAIRS = 2  # total repair sessions across the phase (bounds cost/time)
+MAX_REPAIR_ITERATIONS = 8  # tool-call turns per repair session
+
+
 class HardenPhase:
-    """Run acceptance checks and validation."""
+    """Run acceptance checks; optionally repair a failing check and re-run it."""
 
     async def run(
         self,
@@ -136,6 +163,8 @@ class HardenPhase:
         event_log: EventLog,
         deadline: Deadline,
         ui: ConsoleUI | None = None,
+        provider: LLMProvider | None = None,
+        tokens: TokenTracker | None = None,
     ) -> list[dict[str, Any]]:
         event_log.emit(
             phase=Phase.HARDEN.value,
@@ -146,18 +175,20 @@ class HardenPhase:
 
         results: list[dict[str, Any]] = []
 
-        # Collect all cmd: checks from spec and plan
-        checks: list[tuple[str, str]] = []
+        # Collect all cmd: checks from spec and plan as (name, cmd, expect).
+        checks: list[tuple[str, str, str | None]] = []
 
         for ac in spec.acceptance:
             if ac.is_cmd and ac.command:
-                checks.append((ac.raw, ac.command))
+                checks.append((ac.raw, ac.command, ac.expect))
 
         for ap in plan.acceptance_plan:
             if ap.cmd:
-                checks.append((ap.name, ap.cmd))
+                checks.append((ap.name, ap.cmd, ap.expect_output))
 
-        for name, cmd in checks:
+        repairs_left = MAX_HARDEN_REPAIRS
+
+        for name, cmd, expect in checks:
             if deadline.is_expired() or deadline.should_transition(Phase.HARDEN):
                 results.append({"name": name, "cmd": cmd, "passed": False, "skipped": True})
                 continue
@@ -165,25 +196,47 @@ class HardenPhase:
             if ui:
                 ui.tool_activity("check", name, deadline)
 
-            result = await dispatcher.dispatch(
-                "exec_command", {"command": cmd, "timeout": 30}, context
-            )
-            passed = result.status == "ok"
+            passed, reason, output = await self._run_check(dispatcher, context, cmd, expect)
+            repaired = False
+
+            # A failing check gets one bounded fix-and-retry when a provider is
+            # available and there's still repair budget and phase time.
+            if (
+                not passed
+                and provider is not None
+                and repairs_left > 0
+                and not deadline.is_expired()
+                and not deadline.should_transition(Phase.HARDEN)
+            ):
+                repairs_left -= 1
+                if ui:
+                    ui.tool_activity("repair", f"fixing: {name}", deadline)
+                await self._attempt_repair(
+                    name, cmd, expect, output, dispatcher, context, provider, deadline, tokens
+                )
+                passed, reason, output = await self._run_check(dispatcher, context, cmd, expect)
+                repaired = passed
+
             results.append(
                 {
                     "name": name,
                     "cmd": cmd,
+                    "expect": expect,
                     "passed": passed,
-                    "output": result.display[:1000],
+                    "reason": reason,
+                    "repaired": repaired,
+                    "output": output[:1000],
                 }
             )
 
             event_log.emit(
                 phase=Phase.HARDEN.value,
                 event_type="acceptance.check",
-                summary=f"{'✓' if passed else '✗'} {name}",
-                data={"name": name, "cmd": cmd},
-                result={"passed": passed},
+                summary=f"{'✓' if passed else '✗'} {name}"
+                + (" (repaired)" if repaired else "")
+                + (f" ({reason})" if reason and not passed else ""),
+                data={"name": name, "cmd": cmd, "expect": expect},
+                result={"passed": passed, "reason": reason, "repaired": repaired},
             )
 
         event_log.emit(
@@ -193,6 +246,86 @@ class HardenPhase:
         )
 
         return results
+
+    async def _run_check(
+        self,
+        dispatcher: ToolDispatcher,
+        context: ToolContext,
+        cmd: str,
+        expect: str | None,
+    ) -> tuple[bool, str, str]:
+        """Run one check; a pass needs exit 0 and (if given) the expected output."""
+        result = await dispatcher.dispatch("exec_command", {"command": cmd, "timeout": 30}, context)
+        exit_ok = result.status == "ok"
+        output_ok = expect is None or expect in result.display
+        if not exit_ok:
+            reason = "command failed"
+        elif not output_ok:
+            reason = f"expected output not found: {expect!r}"
+        else:
+            reason = ""
+        return exit_ok and output_ok, reason, result.display
+
+    async def _attempt_repair(
+        self,
+        name: str,
+        cmd: str,
+        expect: str | None,
+        output: str,
+        dispatcher: ToolDispatcher,
+        context: ToolContext,
+        provider: LLMProvider,
+        deadline: Deadline,
+        tokens: TokenTracker | None,
+    ) -> None:
+        """Run a small bounded agent to fix whatever made the check fail."""
+        expect_line = f"\nIt must also contain: {expect!r}" if expect else ""
+        system = f"""\
+An acceptance check for this project failed. Fix the underlying cause so the
+check passes. The project is in {context.workspace}.
+
+Failing check: {name}
+Command: {cmd}{expect_line}
+
+Command output:
+{output[:1500]}
+
+Inspect the relevant files (read_file, search_files) and fix the code or config
+(edit_file, write_file). Keep the change minimal and targeted at this failure —
+do not rewrite unrelated files. You do not need to re-run the check yourself;
+the harness re-runs it after you finish.
+"""
+        messages: list[Message] = [
+            Message(role="system", content=system),
+            Message(role="user", content=f"Fix the failing check: {name}."),
+        ]
+        tool_schemas = [
+            ToolSchema(name=s["name"], description=s["description"], parameters=s["parameters"])
+            for s in dispatcher.to_schemas()
+        ]
+
+        for _i in range(MAX_REPAIR_ITERATIONS):
+            if deadline.is_expired() or deadline.should_transition(Phase.HARDEN):
+                return
+            if tokens is not None and tokens.exceeded():
+                return
+            response = await provider.complete(messages, tools=tool_schemas, effort="medium")
+            if tokens:
+                tokens.add(response.usage)
+            messages.append(
+                Message(role="assistant", content=response.content, tool_calls=response.tool_calls)
+            )
+            if not response.tool_calls:
+                return
+            for tc in response.tool_calls:
+                result = await dispatcher.dispatch(tc.name, tc.arguments, context)
+                messages.append(
+                    Message(
+                        role="tool",
+                        content=result.display or json.dumps(result.data),
+                        tool_call_id=tc.id,
+                    )
+                )
 
 
 class VerifyPhase:
@@ -229,10 +362,14 @@ Work quickly — this is time-boxed and the user is waiting on a working demo.
 Approach:
 1. Find the dependency manifest (one list_directory of the root is enough).
 2. Install dependencies (`python3 -m pip install -r requirements.txt` or `npm install`).
-3. Start the app in the background and confirm it serves a request, e.g.
-   `nohup python3 app.py > /dev/null 2>&1 &` then `sleep 2 && curl -s localhost:5000`.
-   Node apps: `npm start &` (or `node server.js &`), then curl the port it logs.
-4. If it responds, you are done — a successful curl is sufficient evidence.
+3. Start the app in the background, e.g. `nohup python3 app.py > /dev/null 2>&1 &`,
+   or `npm start &` / `node server.js &` for Node apps.
+4. Prove it works by calling confirm_running with a command that demonstrates it —
+   usually a curl, e.g. `curl -sf localhost:5000`. Provide an expected substring
+   when you know one (e.g. a title from the page). The harness will actually run
+   your command and only accept the verification if it really succeeds, so pick a
+   command that genuinely exercises the app — asserting success without a passing
+   command will not work.
 
 Environment notes:
 - Use `python3` and `python3 -m pip`, not `python`/`pip`.
@@ -241,17 +378,18 @@ Environment notes:
   `lsof -ti :<PORT> | xargs kill`. If the app uses a non-default port, curl that port.
 - You don't need to read every file or understand all the code to verify it runs.
 
-If it can't be made to run in a few fix attempts, report the blocker rather than
-looping. End with exactly one verdict line:
-- `VERIFIED: <one-line description>` if the app runs
-- `FAILED: <what's broken>` if it can't be made to run
+If you cannot get it running after a few fix attempts, call report_failed with
+the blocker instead of looping.
 """
 
         messages: list[Message] = [
             Message(role="system", content=system),
             Message(
                 role="user",
-                content=f"Get {spec.name} running NOW. Install deps, start server, curl it. Go.",
+                content=(
+                    f"Get {spec.name} running. Install deps, start the server, then "
+                    "call confirm_running with a command that proves it responds."
+                ),
             ),
         ]
 
@@ -259,11 +397,18 @@ looping. End with exactly one verdict line:
             ToolSchema(name=s["name"], description=s["description"], parameters=s["parameters"])
             for s in dispatcher.to_schemas()
         ]
+        tool_schemas.extend(_verify_virtual_tools())
 
-        # Aggressive agent loop — more iterations than build phase gets
+        # Cap how many times the agent may propose a proof command that fails,
+        # so it can't loop forever on bad checks.
+        confirm_attempts = 0
+        max_confirm_attempts = 5
+
         for _i in range(MAX_VERIFY_ITERATIONS):
             if deadline.is_expired():
-                return False, "Deadline expired during verification"
+                return self._fail(event_log, "Deadline expired during verification")
+            if tokens is not None and tokens.exceeded():
+                return self._fail(event_log, "Token budget reached during verification")
 
             response = await provider.complete(messages, tools=tool_schemas)
             if tokens:
@@ -272,31 +417,8 @@ looping. End with exactly one verdict line:
             messages.append(
                 Message(role="assistant", content=response.content, tool_calls=response.tool_calls)
             )
-
-            if response.content:
-                if ui:
-                    ui.tool_activity("verify", response.content[:80], deadline)
-
-                # Check for final verdict
-                content_upper = response.content.upper()
-                if "VERIFIED:" in content_upper:
-                    idx = response.content.upper().index("VERIFIED:")
-                    msg = response.content[idx + 9 :].strip()
-                    event_log.emit(
-                        phase=Phase.VERIFY.value,
-                        event_type="verify.pass",
-                        summary=f"MVP verified: {msg}",
-                    )
-                    return True, msg
-                if "FAILED:" in content_upper:
-                    idx = response.content.upper().index("FAILED:")
-                    msg = response.content[idx + 7 :].strip()
-                    event_log.emit(
-                        phase=Phase.VERIFY.value,
-                        event_type="verify.fail",
-                        summary=f"MVP failed: {msg}",
-                    )
-                    return False, msg
+            if response.content and ui:
+                ui.tool_activity("verify", response.content[:80], deadline)
 
             if not response.tool_calls:
                 if response.stop_reason == "end_turn":
@@ -304,6 +426,23 @@ looping. End with exactly one verdict line:
                 continue
 
             for tc in response.tool_calls:
+                if tc.name == "report_failed":
+                    reason = str(tc.arguments.get("reason", "unspecified"))
+                    return self._fail(event_log, reason)
+
+                if tc.name == "confirm_running":
+                    ok, detail = await self._run_confirmation(tc, dispatcher, context, ui, deadline)
+                    if ok:
+                        return self._pass(event_log, detail)
+                    confirm_attempts += 1
+                    messages.append(Message(role="tool", content=detail, tool_call_id=tc.id))
+                    if confirm_attempts >= max_confirm_attempts:
+                        return self._fail(
+                            event_log,
+                            "Could not confirm the app runs after several attempts",
+                        )
+                    continue
+
                 if ui:
                     ui.tool_activity(tc.name, tool_summary(tc.name, tc.arguments), deadline)
                 result = await dispatcher.dispatch(tc.name, tc.arguments, context)
@@ -315,7 +454,103 @@ looping. End with exactly one verdict line:
                     )
                 )
 
-        return False, "Verification did not complete"
+        return self._fail(event_log, "Verification did not complete")
+
+    async def _run_confirmation(
+        self,
+        tc: Any,
+        dispatcher: ToolDispatcher,
+        context: ToolContext,
+        ui: ConsoleUI | None,
+        deadline: Deadline,
+    ) -> tuple[bool, str]:
+        """Independently run the agent's proof command and judge the result.
+
+        The verdict is based on what the command actually does, not on the
+        agent's assertion — this is the whole point of the phase.
+        """
+        command = str(tc.arguments.get("command", "")).strip()
+        expect = tc.arguments.get("expect")
+        summary = str(tc.arguments.get("summary", "")).strip()
+        if not command:
+            return False, "confirm_running needs a command that demonstrates the app works."
+
+        if ui:
+            ui.tool_activity("confirm", command[:80], deadline)
+        result = await dispatcher.dispatch(
+            "exec_command", {"command": command, "timeout": 15}, context
+        )
+        if result.status != "ok":
+            return False, f"That command failed:\n{result.display[:800]}\nKeep fixing and retry."
+        if expect and str(expect) not in result.display:
+            return False, (
+                f"The command ran but its output did not contain {str(expect)!r}:\n"
+                f"{result.display[:800]}\nFix the app or correct the check, then retry."
+            )
+
+        detail = summary or f"confirmed via `{command}`"
+        return True, detail
+
+    def _pass(self, event_log: EventLog, detail: str) -> tuple[bool, str]:
+        event_log.emit(
+            phase=Phase.VERIFY.value,
+            event_type="verify.pass",
+            summary=f"MVP verified (independently confirmed): {detail}",
+        )
+        return True, detail
+
+    def _fail(self, event_log: EventLog, reason: str) -> tuple[bool, str]:
+        event_log.emit(
+            phase=Phase.VERIFY.value,
+            event_type="verify.fail",
+            summary=f"MVP not verified: {reason}",
+        )
+        return False, reason
+
+
+def _verify_virtual_tools() -> list[ToolSchema]:
+    """Tools the verify agent uses to report a verdict; handled by the phase."""
+    return [
+        ToolSchema(
+            name="confirm_running",
+            description=(
+                "Assert the app is running by giving a command that proves it. The "
+                "harness runs the command itself and only accepts the verification "
+                "if it exits 0 (and, if 'expect' is given, its output contains that "
+                "text). Use this once the app responds."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Command that demonstrates the app works, e.g. "
+                        "'curl -sf localhost:5000'",
+                    },
+                    "expect": {
+                        "type": "string",
+                        "description": "Optional substring the command's output must contain",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "One-line description of what runs",
+                    },
+                },
+                "required": ["command"],
+            },
+        ),
+        ToolSchema(
+            name="report_failed",
+            description="Report that the app cannot be made to run, with the blocker.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "What is broken"},
+                },
+                "required": ["reason"],
+            },
+        ),
+    ]
 
 
 class HandoffPhase:

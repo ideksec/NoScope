@@ -373,6 +373,8 @@ RULES:
 - The project structure and dependencies are already set up — do NOT reinstall or reconfigure
 - Write code for YOUR tasks only
 - Do NOT modify files that other agents might be working on
+- To change an existing file, use edit_file (targeted string replacement), not write_file — it's cheaper and won't clobber unrelated content
+- Use write_file only to create a new file or fully replace one you own
 - Call mark_task_complete after finishing each task
 - If you need a file that doesn't exist yet, create it — another agent may not have written it yet
 - NEVER use interactive scaffolding tools (create-react-app, npm create, etc)

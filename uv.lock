@@ -60,6 +60,7 @@ wheels = [
 name = "ast-serialize"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c0/6a/a68c7f823e67714393060a0f232b0d75e0b2d2f1a7aef0633f7007411804/ast_serialize-0.7.0.tar.gz", hash = "sha256:934c0920454381b0beb46a5dc0af114d48699a44537b97282c2346a23990713d", size = 845507, upload-time = "2026-08-06T14:07:38.216Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/80/15/3b0e4edec45fd31a55243e37263236946cdfe6901e3f8cff934a443eddc0/ast_serialize-0.7.0-cp314-cp314t-macosx_10_12_x86_64.whl", hash = "sha256:55e524f1329e2ee3f17d497b45d16a069afd2020b324ef6f32d21831e0b47a81", size = 1177653, upload-time = "2026-08-06T14:06:07.738Z" },
     { url = "https://files.pythonhosted.org/packages/e8/3d/ecb5f748a3ff50153b5956200a8eea265797de98ebe7b6ca9f8f28d65f08/ast_serialize-0.7.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:8dcbb7b94e5cb8c718f4f5c310b608fa73cd3714b819fe1995b20acfa6847689", size = 1167069, upload-time = "2026-08-06T14:06:09.49Z" },
@@ -111,6 +112,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/1a/46/a316dddccecedafea3002a9ed1cd6666ab5e64c3094951625b5a1ef95a1c/ast_serialize-0.7.0-cp39-abi3-musllinux_1_2_armv7l.whl", hash = "sha256:95219c374d0ac76639b26b66cca26e8cb090bf8c515d6bc376af484514d10151", size = 1509449, upload-time = "2026-08-06T14:07:23.53Z" },
     { url = "https://files.pythonhosted.org/packages/81/34/c58f49cc9da933af6ee0f802eb780c48648ae9d0ee9188cb802c10dce29f/ast_serialize-0.7.0-cp39-abi3-musllinux_1_2_i686.whl", hash = "sha256:1e71d8879b8c3480eb461128bbf0d5ff87f5ce368fcdb10c850a95010aa5ece4", size = 1505368, upload-time = "2026-08-06T14:07:25.101Z" },
     { url = "https://files.pythonhosted.org/packages/1f/ce/4c5a9ff4e2851ec38ecb8aeef8cb7e0a02308616279c04429342e12985f4/ast_serialize-0.7.0-cp39-abi3-musllinux_1_2_ppc64le.whl", hash = "sha256:85fa81ed590407c6ef6f85cac8e451051bf2623ecd875c4e124af8b8251de3ac", size = 1563486, upload-time = "2026-08-06T14:07:26.937Z" },
+    { url = "https://files.pythonhosted.org/packages/82/78/f239d17f902a2ce39da8e6dc034f48f45da93dfda658fa88189a02763510/ast_serialize-0.7.0-cp39-abi3-musllinux_1_2_riscv64.whl", hash = "sha256:fd018e40c9462235a1d2d101b420cff6c577e5a51b2954ffc05b907a0807defc", size = 1427995, upload-time = "2026-08-06T14:07:28.773Z" },
+    { url = "https://files.pythonhosted.org/packages/62/6c/024f58d8b52ce29717c54a578f0bbd844439fcb8eb442596e756fd6eaffe/ast_serialize-0.7.0-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:90a614b8c844620473b7445d31a2a6bf9500fdc4a8d1e2b6a70d40f38beea0e5", size = 1454215, upload-time = "2026-08-06T14:07:30.526Z" },
+    { url = "https://files.pythonhosted.org/packages/12/48/f046778df64acef37a36a7338a9bdaa795f46b19d35a4d28bddcd8dfaec7/ast_serialize-0.7.0-cp39-abi3-pyemscripten_2026_0_wasm32.whl", hash = "sha256:e6cfb423d4a14d774b3b82f6509adbc5da065246b6ec679221ad133820e0f7f4", size = 868142, upload-time = "2026-08-06T14:07:32.139Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/fc/c862cc8d4d8d749f360035baa245fb3098b8b934c57122c0222ac5078762/ast_serialize-0.7.0-cp39-abi3-win32.whl", hash = "sha256:e818854e8521846f5a5271b1488c490231b8b6e02d0158ec42e57bc06dd764f0", size = 1068874, upload-time = "2026-08-06T14:07:33.895Z" },
+    { url = "https://files.pythonhosted.org/packages/92/33/e846301850c18fa31598e342bb80b32f380c1bce285df571f5c3711960ff/ast_serialize-0.7.0-cp39-abi3-win_amd64.whl", hash = "sha256:942921b81440d3ea57f90370d5d29bf28dc81c0778e26b736013e83c7b258023", size = 1111845, upload-time = "2026-08-06T14:07:35.308Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/8c/4ee99be6306e72fac6051461794e5cd7895bbbdafe5b921a9a8c4b6fde1c/ast_serialize-0.7.0-cp39-abi3-win_arm64.whl", hash = "sha256:43b73cf3924aa49f241be6e5f6a19943c8e2e07a2786fc719cacaa54ac6fd2d5", size = 1083656, upload-time = "2026-08-06T14:07:36.828Z" },
 ]
 
 [[package]]
@@ -510,7 +517,7 @@ wheels = [
 
 [[package]]
 name = "noscope"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -548,7 +555,7 @@ requires-dist = [
     { name = "pyyaml" },
     { name = "rich" },
     { name = "ruff", marker = "extra == 'dev'" },
-    { name = "typer", extras = ["all"] },
+    { name = "typer", specifier = ">=0.12" },
 ]
 provides-extras = ["dev"]
 

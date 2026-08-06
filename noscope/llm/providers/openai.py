@@ -80,9 +80,15 @@ class OpenAIProvider:
 
         usage = Usage()
         if response.usage:
+            # OpenAI reports cached prompt tokens inside prompt_tokens (not in
+            # addition to it), so subtract them out to mirror Anthropic's
+            # "input_tokens is the uncached remainder" convention.
+            details = getattr(response.usage, "prompt_tokens_details", None)
+            cached = getattr(details, "cached_tokens", 0) or 0 if details else 0
             usage = Usage(
-                input_tokens=response.usage.prompt_tokens,
+                input_tokens=max(0, response.usage.prompt_tokens - cached),
                 output_tokens=response.usage.completion_tokens,
+                cache_read_input_tokens=cached,
             )
 
         finish_reason = choice.finish_reason or ""

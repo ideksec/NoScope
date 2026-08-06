@@ -1,6 +1,6 @@
 [project]
 name = "noscope"
-version = "0.1.0"
+version = "0.2.0"
 description = "Time-boxed autonomous agent orchestration tool that builds runnable software MVPs from written specs"
 readme = "README.md"
 license = "MIT"
@@ -20,7 +20,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "typer[all]",
+    "typer>=0.12",
     "rich",
     "pydantic>=2.0",
     "pydantic-settings",

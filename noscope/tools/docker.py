@@ -8,6 +8,9 @@ container with zero risk to the host.
 from __future__ import annotations
 
 import asyncio
+import base64
+import posixpath
+import re
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +22,45 @@ from noscope.tools.safety import check_command_safety
 DOCKER_IMAGE = "python:3.12-slim"
 DOCKER_MEMORY_LIMIT = "1g"
 DOCKER_CPU_LIMIT = "2.0"
+
+# Container paths are interpolated into shell strings, so restrict them to a
+# safe allowlist: no shell metacharacters, no absolute paths, no traversal.
+_SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+
+
+def safe_container_path(rel_path: str) -> str:
+    """Validate a workspace-relative path for safe use in a container command.
+
+    Rejects absolute paths, ``..`` traversal, and anything outside a safe
+    character set — closing the path-injection hole where a crafted path could
+    escape /workspace or inject a shell command. Returns the normalized path.
+    """
+    rel = (rel_path or "").strip()
+    if rel in ("", ".", "./"):
+        return "."
+    if rel.startswith("/"):
+        raise ValueError(f"Absolute paths are not allowed: {rel_path!r}")
+    if rel.startswith("./"):  # strip a single leading "./", nothing more
+        rel = rel[2:]
+    if not _SAFE_PATH_RE.match(rel):
+        raise ValueError(f"Unsafe characters in path: {rel_path!r}")
+    if ".." in rel.split("/"):
+        raise ValueError(f"Path traversal is not allowed: {rel_path!r}")
+    return rel
+
+
+def build_write_command(rel_path: str, content: str) -> str:
+    """Build a shell command that writes content to a container path safely.
+
+    Uses base64 so arbitrary file content — backslashes, quotes, the heredoc
+    marker, anything — round-trips exactly, instead of the old heredoc that
+    doubled backslashes and could be truncated by the content itself.
+    """
+    path = safe_container_path(rel_path)
+    b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    parent = posixpath.dirname(path)
+    mkdir = f"mkdir -p '/workspace/{parent}' && " if parent else ""
+    return f"{mkdir}printf %s '{b64}' | base64 -d > '/workspace/{path}'"
 
 
 class DockerSandbox:
@@ -177,33 +219,34 @@ class DockerFileTool:
 
     async def _read_in_container(self, rel_path: str) -> tuple[bool, str]:
         """Read a file inside the container. Returns (success, content_or_error)."""
-        code, stdout, stderr = await self._sandbox.execute(
-            f'cat "/workspace/{rel_path}"', timeout=10
-        )
+        try:
+            path = safe_container_path(rel_path)
+        except ValueError as e:
+            return False, str(e)
+        code, stdout, stderr = await self._sandbox.execute(f"cat '/workspace/{path}'", timeout=10)
         if code != 0:
             return False, stderr or f"File not found: {rel_path}"
         return True, stdout
 
     async def _write_in_container(self, rel_path: str, content: str) -> tuple[bool, str]:
         """Write a file inside the container. Returns (success, error_msg)."""
-        # Ensure parent directory exists
-        parent = "/workspace/" + "/".join(rel_path.split("/")[:-1])
-        if parent != "/workspace/":
-            await self._sandbox.execute(f'mkdir -p "{parent}"', timeout=5)
-        # Write via heredoc to handle special characters
-        escaped = content.replace("\\", "\\\\").replace("'", "'\\''")
-        code, _, stderr = await self._sandbox.execute(
-            f"cat > '/workspace/{rel_path}' << 'NOSCOPE_EOF'\n{escaped}\nNOSCOPE_EOF",
-            timeout=30,
-        )
+        try:
+            command = build_write_command(rel_path, content)
+        except ValueError as e:
+            return False, str(e)
+        code, _, stderr = await self._sandbox.execute(command, timeout=30)
         if code != 0:
             return False, stderr
         return True, ""
 
     async def _list_in_container(self, rel_path: str) -> tuple[bool, str]:
         """List a directory inside the container. Returns (success, listing_or_error)."""
+        try:
+            path = safe_container_path(rel_path)
+        except ValueError as e:
+            return False, str(e)
         code, stdout, stderr = await self._sandbox.execute(
-            f'ls -1F "/workspace/{rel_path}"', timeout=10
+            f"ls -1F '/workspace/{path}'", timeout=10
         )
         if code != 0:
             return False, stderr or f"Directory not found: {rel_path}"
@@ -211,9 +254,11 @@ class DockerFileTool:
 
     async def _mkdir_in_container(self, rel_path: str) -> tuple[bool, str]:
         """Create a directory inside the container."""
-        code, _, stderr = await self._sandbox.execute(
-            f'mkdir -p "/workspace/{rel_path}"', timeout=5
-        )
+        try:
+            path = safe_container_path(rel_path)
+        except ValueError as e:
+            return False, str(e)
+        code, _, stderr = await self._sandbox.execute(f"mkdir -p '/workspace/{path}'", timeout=5)
         if code != 0:
             return False, stderr
         return True, ""

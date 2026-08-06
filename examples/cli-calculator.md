@@ -6,8 +6,8 @@ constraints:
   - "No external dependencies"
   - "Command-line interface"
 acceptance:
-  - "cmd: python calc.py add 2 3"
-  - "cmd: python calc.py multiply 4 5"
+  - "cmd: python3 calc.py add 2 3 ==> 5"
+  - "cmd: python3 calc.py multiply 4 5 ==> 20"
   - "Handles basic error cases"
 ---
 

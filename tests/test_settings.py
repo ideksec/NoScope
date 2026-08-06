@@ -80,3 +80,23 @@ class TestCostEstimation:
         from noscope.ui.console import estimate_cost
 
         assert estimate_cost("some-future-model", 1000, 1000) is None
+
+
+class TestCacheAwareCost:
+    def test_cache_read_is_cheaper_and_reports_savings(self) -> None:
+        from noscope.ui.console import estimate_cost_detailed
+
+        # 1M uncached vs 1M cache-read on claude-sonnet-5 ($3/MTok input)
+        uncached, _ = estimate_cost_detailed("claude-sonnet-5", 1_000_000, 0)
+        cached, savings = estimate_cost_detailed("claude-sonnet-5", 0, 0, 0, 1_000_000)
+        assert cached is not None and uncached is not None
+        assert cached < uncached  # reads bill at ~0.1x
+        # savings ≈ full input price ($3) minus the 0.1x actually paid ($0.30)
+        assert abs(savings - 2.70) < 0.01
+
+    def test_unknown_model_none(self) -> None:
+        from noscope.ui.console import estimate_cost_detailed
+
+        cost, savings = estimate_cost_detailed("mystery", 100, 100, 0, 100)
+        assert cost is None
+        assert savings == 0.0

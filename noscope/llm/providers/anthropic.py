@@ -94,6 +94,11 @@ class AnthropicProvider:
             usage=Usage(
                 input_tokens=response.usage.input_tokens,
                 output_tokens=response.usage.output_tokens,
+                cache_creation_input_tokens=getattr(
+                    response.usage, "cache_creation_input_tokens", 0
+                )
+                or 0,
+                cache_read_input_tokens=getattr(response.usage, "cache_read_input_tokens", 0) or 0,
             ),
             stop_reason=response.stop_reason or "",
         )

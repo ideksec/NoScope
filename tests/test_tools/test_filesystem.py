@@ -7,10 +7,71 @@ import pytest
 from noscope.tools.base import ToolContext
 from noscope.tools.filesystem import (
     CreateDirectoryTool,
+    EditFileTool,
     ListDirectoryTool,
     ReadFileTool,
     WriteFileTool,
 )
+
+
+@pytest.mark.asyncio
+class TestEditFileTool:
+    async def test_unique_replacement(self, tool_context: ToolContext) -> None:
+        (tool_context.workspace / "app.py").write_text("x = 1\ny = 2\n")
+        tool = EditFileTool()
+        result = await tool.execute(
+            {"path": "app.py", "old_string": "x = 1", "new_string": "x = 42"}, tool_context
+        )
+        assert result.status == "ok"
+        assert result.data["replacements"] == 1
+        assert (tool_context.workspace / "app.py").read_text() == "x = 42\ny = 2\n"
+
+    async def test_missing_old_string(self, tool_context: ToolContext) -> None:
+        (tool_context.workspace / "app.py").write_text("hello\n")
+        tool = EditFileTool()
+        result = await tool.execute(
+            {"path": "app.py", "old_string": "nope", "new_string": "x"}, tool_context
+        )
+        assert result.status == "error"
+        assert "not found" in result.display
+
+    async def test_ambiguous_match_rejected(self, tool_context: ToolContext) -> None:
+        (tool_context.workspace / "app.py").write_text("a\na\n")
+        tool = EditFileTool()
+        result = await tool.execute(
+            {"path": "app.py", "old_string": "a", "new_string": "b"}, tool_context
+        )
+        assert result.status == "error"
+        assert "appears 2 times" in result.display
+        # File is left untouched on an ambiguous match
+        assert (tool_context.workspace / "app.py").read_text() == "a\na\n"
+
+    async def test_replace_all(self, tool_context: ToolContext) -> None:
+        (tool_context.workspace / "app.py").write_text("a\na\na\n")
+        tool = EditFileTool()
+        result = await tool.execute(
+            {"path": "app.py", "old_string": "a", "new_string": "b", "replace_all": True},
+            tool_context,
+        )
+        assert result.status == "ok"
+        assert result.data["replacements"] == 3
+        assert (tool_context.workspace / "app.py").read_text() == "b\nb\nb\n"
+
+    async def test_nonexistent_file(self, tool_context: ToolContext) -> None:
+        tool = EditFileTool()
+        result = await tool.execute(
+            {"path": "ghost.py", "old_string": "a", "new_string": "b"}, tool_context
+        )
+        assert result.status == "error"
+        assert "not found" in result.display
+
+    async def test_noop_edit_rejected(self, tool_context: ToolContext) -> None:
+        (tool_context.workspace / "app.py").write_text("same\n")
+        tool = EditFileTool()
+        result = await tool.execute(
+            {"path": "app.py", "old_string": "same", "new_string": "same"}, tool_context
+        )
+        assert result.status == "error"
 
 
 @pytest.mark.asyncio
@@ -78,3 +139,20 @@ class TestCreateDirectoryTool:
         result = await tool.execute({"path": "a/b/c"}, tool_context)
         assert result.status == "ok"
         assert (tool_context.workspace / "a/b/c").is_dir()
+
+
+@pytest.mark.asyncio
+class TestReadFilePartial:
+    async def test_offset_and_limit(self, tool_context: ToolContext) -> None:
+        (tool_context.workspace / "f.txt").write_text("l1\nl2\nl3\nl4\nl5\n")
+        tool = ReadFileTool()
+        result = await tool.execute({"path": "f.txt", "offset": 2, "limit": 2}, tool_context)
+        assert result.status == "ok"
+        assert result.data["content"] == "l2\nl3"
+        assert result.data["lines"] == "2-3 of 5"
+
+    async def test_full_read_unchanged(self, tool_context: ToolContext) -> None:
+        (tool_context.workspace / "f.txt").write_text("a\nb\n")
+        tool = ReadFileTool()
+        result = await tool.execute({"path": "f.txt"}, tool_context)
+        assert result.data["content"] == "a\nb\n"

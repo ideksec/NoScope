@@ -6,7 +6,7 @@ constraints:
   - "Python only"
   - "No database needed"
 acceptance:
-  - "cmd: pip install -r requirements.txt && python -c \"import app\""
+  - "cmd: python3 -m pip install -r requirements.txt && python3 -c \"import app\""
   - "Server has a / route that returns HTML"
 ---
 

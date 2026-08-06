@@ -23,6 +23,8 @@ class NoscopeSettings(BaseSettings):
     fast_model: str | None = "claude-haiku-4-5"
     max_tokens: int = 8192
     effort: str = "high"
+    # Optional total-token spend cap for a run (a peer to the timebox); None = no cap.
+    token_budget: int | None = None
     default_timebox: str = "30m"
     danger_mode: bool = False
 

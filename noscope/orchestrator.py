@@ -38,6 +38,7 @@ from noscope.tools.docker import (
 )
 from noscope.tools.filesystem import (
     CreateDirectoryTool,
+    EditFileTool,
     ListDirectoryTool,
     ReadFileTool,
     WriteFileTool,
@@ -49,6 +50,7 @@ from noscope.tools.git import (
     GitInitTool,
     GitStatusTool,
 )
+from noscope.tools.search import FindFilesTool, SearchFilesTool
 from noscope.tools.shell import ShellTool, build_execution_env
 from noscope.ui.console import ConsoleUI
 
@@ -109,8 +111,8 @@ class Orchestrator:
         serve: bool = False,
     ) -> Path:
         """Execute a full NoScope run. Returns the run directory path."""
-        # Token tracking for cost calculation
-        tokens = TokenTracker()
+        # Token tracking for cost calculation, with an optional spend cap.
+        tokens = TokenTracker(budget=self.settings.token_budget)
 
         # 1. Parse spec — from file or pre-built SpecInput
         if spec_input is not None:
@@ -186,8 +188,11 @@ class Orchestrator:
                 [
                     ReadFileTool(),
                     WriteFileTool(),
+                    EditFileTool(),
                     ListDirectoryTool(),
                     CreateDirectoryTool(),
+                    SearchFilesTool(),
+                    FindFilesTool(),
                     ShellTool(),
                     GitInitTool(),
                     GitStatusTool(),
@@ -281,6 +286,8 @@ class Orchestrator:
                 event_log,
                 deadline,
                 ui=self.ui,
+                provider=self.provider,
+                tokens=tokens,
             )
             self.ui.acceptance_results(acceptance_results)
 
@@ -362,6 +369,8 @@ class Orchestrator:
                 "run_dir": str(run_dir.path),
                 "input_tokens": tokens.input_tokens,
                 "output_tokens": tokens.output_tokens,
+                "cache_creation_input_tokens": tokens.cache_creation_input_tokens,
+                "cache_read_input_tokens": tokens.cache_read_input_tokens,
             },
         )
         event_log.close()
@@ -392,6 +401,9 @@ class Orchestrator:
             output_tokens=tokens.output_tokens,
             provider=provider_name,
             model=self._model,
+            cache_creation_tokens=tokens.cache_creation_input_tokens,
+            cache_read_tokens=tokens.cache_read_input_tokens,
+            token_budget=tokens.budget,
         )
 
         # 12. LAUNCH — only with --serve does NoScope keep a process running

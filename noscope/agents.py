@@ -136,6 +136,15 @@ class BuildAgent:
         for _iteration in range(MAX_AGENT_ITERATIONS):
             if self.deadline.is_expired() or self.deadline.should_transition(Phase.BUILD):
                 break
+            # Token spend cap — stop like a deadline so the run still hands off.
+            if self.tokens is not None and self.tokens.exceeded():
+                self.event_log.emit(
+                    phase=Phase.BUILD.value,
+                    event_type="budget.exceeded",
+                    summary=f"[{self.agent_id}] Token budget reached — stopping",
+                    data={"agent_id": self.agent_id},
+                )
+                break
 
             # Check if all assigned tasks are done (skip check if no tasks assigned)
             if tasks and all(t.completed for t in tasks):
@@ -225,21 +234,25 @@ class BuildAgent:
         tool_calls: list[ToolCall],
         task_map: dict[str, PlanTask],
     ) -> list[Message]:
-        """Execute tool calls with file ops in parallel, shell commands sequential."""
+        """Execute tool calls: read-only file ops in parallel, mutations and
+        shell sequentially so same-file edits and dependent commands don't race."""
         results: list[Message] = []
 
-        # Separate virtual, file, and shell calls
+        # Read-only file ops are safe to run concurrently; mutations are not
+        # (edit_file is read-modify-write, so two edits to one file could lose
+        # a change), and shell commands may depend on each other.
         virtual_calls: list[ToolCall] = []
-        file_calls: list[ToolCall] = []
-        shell_calls: list[ToolCall] = []
+        read_calls: list[ToolCall] = []
+        sequential_calls: list[ToolCall] = []
 
         for tc in tool_calls:
             if tc.name == "mark_task_complete":
                 virtual_calls.append(tc)
-            elif tc.name in ("write_file", "read_file", "list_directory", "create_directory"):
-                file_calls.append(tc)
+            elif tc.name in ("read_file", "list_directory", "search_files", "find_files"):
+                read_calls.append(tc)
             else:
-                shell_calls.append(tc)
+                # write_file, edit_file, create_directory, shell, git, ...
+                sequential_calls.append(tc)
 
         # Handle virtual calls immediately
         for tc in virtual_calls:
@@ -266,14 +279,13 @@ class BuildAgent:
                     Message(role="tool", content=f"Unknown task ID: {task_id}", tool_call_id=tc.id)
                 )
 
-        # Execute file operations in parallel
-        if file_calls:
-            file_coros = [self._dispatch_and_wrap(tc) for tc in file_calls]
-            file_results = await asyncio.gather(*file_coros)
-            results.extend(file_results)
+        # Execute read-only file operations in parallel
+        if read_calls:
+            read_coros = [self._dispatch_and_wrap(tc) for tc in read_calls]
+            results.extend(await asyncio.gather(*read_coros))
 
-        # Execute shell commands sequentially (they may depend on each other)
-        for tc in shell_calls:
+        # Execute mutations and shell commands sequentially
+        for tc in sequential_calls:
             if self.ui:
                 self.ui.tool_activity(tc.name, tool_summary(tc.name, tc.arguments), self.deadline)
             result = await self.dispatcher.dispatch(tc.name, tc.arguments, self.context)

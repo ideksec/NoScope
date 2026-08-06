@@ -369,6 +369,8 @@ class Orchestrator:
                 "run_dir": str(run_dir.path),
                 "input_tokens": tokens.input_tokens,
                 "output_tokens": tokens.output_tokens,
+                "cache_creation_input_tokens": tokens.cache_creation_input_tokens,
+                "cache_read_input_tokens": tokens.cache_read_input_tokens,
             },
         )
         event_log.close()
@@ -399,6 +401,8 @@ class Orchestrator:
             output_tokens=tokens.output_tokens,
             provider=provider_name,
             model=self._model,
+            cache_creation_tokens=tokens.cache_creation_input_tokens,
+            cache_read_tokens=tokens.cache_read_input_tokens,
         )
 
         # 12. LAUNCH — only with --serve does NoScope keep a process running

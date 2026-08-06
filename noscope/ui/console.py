@@ -26,13 +26,48 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
 }
 
 
+# Prompt-cache multipliers relative to the base input rate: reads are ~0.1x,
+# writes ~1.25x (5-minute TTL).
+_CACHE_READ_MULT = 0.1
+_CACHE_WRITE_MULT = 1.25
+
+
 def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float | None:
     """Estimated run cost in USD, or None when the model's pricing is unknown."""
+    return estimate_cost_detailed(model, input_tokens, output_tokens)[0]
+
+
+def estimate_cost_detailed(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_creation_tokens: int = 0,
+    cache_read_tokens: int = 0,
+) -> tuple[float | None, float]:
+    """Return (cost, cache_savings) in USD, or (None, 0.0) for unknown models.
+
+    ``cache_savings`` is what the cached prompt tokens would have cost at the
+    full input rate minus what they actually cost — the demonstrable payoff of
+    prompt caching.
+    """
     prices = MODEL_PRICING.get(model)
     if prices is None:
-        return None
+        return None, 0.0
     input_price, output_price = prices
-    return (input_tokens / 1_000_000 * input_price) + (output_tokens / 1_000_000 * output_price)
+    per = input_price / 1_000_000
+
+    cost = (
+        input_tokens * per
+        + cache_creation_tokens * per * _CACHE_WRITE_MULT
+        + cache_read_tokens * per * _CACHE_READ_MULT
+        + output_tokens / 1_000_000 * output_price
+    )
+    # What the cached tokens would have cost uncached, minus what they did cost.
+    full = (cache_creation_tokens + cache_read_tokens) * per
+    actual = (
+        cache_creation_tokens * per * _CACHE_WRITE_MULT + cache_read_tokens * per * _CACHE_READ_MULT
+    )
+    return cost, max(0.0, full - actual)
 
 
 class ConsoleUI:
@@ -180,6 +215,8 @@ class ConsoleUI:
         output_tokens: int,
         provider: str,
         model: str,
+        cache_creation_tokens: int = 0,
+        cache_read_tokens: int = 0,
     ) -> None:
         """Show comprehensive final summary — always displayed."""
         # Status line
@@ -214,15 +251,21 @@ class ConsoleUI:
         lines.append(f"  Event log:   [cyan]{run_dir / 'events.jsonl'}[/cyan]")
 
         # Cost
-        cost = estimate_cost(model, input_tokens, output_tokens)
+        cost, savings = estimate_cost_detailed(
+            model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens
+        )
+        total_in = input_tokens + cache_creation_tokens + cache_read_tokens
         if cost is not None:
-            lines.append(
-                f"  Cost:        ${cost:.4f} ({input_tokens:,} in / {output_tokens:,} out)"
-            )
+            cost_line = f"  Cost:        ${cost:.4f} ({total_in:,} in / {output_tokens:,} out)"
+            if cache_read_tokens or cache_creation_tokens:
+                cost_line += f"\n  Cache:       {cache_read_tokens:,} read" + (
+                    f", saved ${savings:.4f}" if savings else ""
+                )
+            lines.append(cost_line)
         else:
             lines.append(
                 f"  Cost:        unknown pricing for {model} "
-                f"({input_tokens:,} in / {output_tokens:,} out)"
+                f"({total_in:,} in / {output_tokens:,} out)"
             )
 
         self.console.print(

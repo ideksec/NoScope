@@ -36,10 +36,17 @@ class ToolSchema:
 
 @dataclass
 class Usage:
-    """Token usage."""
+    """Token usage for one call.
+
+    ``input_tokens`` is the uncached prompt remainder; cached prompt tokens are
+    reported separately so cost can credit the cache. Total prompt tokens =
+    ``input_tokens + cache_creation_input_tokens + cache_read_input_tokens``.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
 
 
 @dataclass

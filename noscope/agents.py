@@ -21,6 +21,43 @@ MAX_AGENT_ITERATIONS = 200
 TIME_STATUS_INTERVAL = 3  # Inject time status every N tool calls
 
 
+class AuditFeed:
+    """Shared channel between the audit agent and build agents.
+
+    The audit agent publishes findings; each worker polls for findings it
+    hasn't seen yet and injects them into its own conversation. Findings are
+    deduplicated by (type, message) so workers aren't re-alerted every audit
+    cycle for the same unresolved issue.
+    """
+
+    def __init__(self) -> None:
+        self._findings: list[dict[str, Any]] = []
+        self._seen_keys: set[tuple[str, str]] = set()
+        self._cursors: dict[str, int] = {}
+
+    def publish(self, findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Add findings to the feed. Returns only the findings that are new."""
+        new: list[dict[str, Any]] = []
+        for finding in findings:
+            key = (str(finding.get("type", "")), str(finding.get("message", "")))
+            if key in self._seen_keys:
+                continue
+            self._seen_keys.add(key)
+            self._findings.append(finding)
+            new.append(finding)
+        return new
+
+    def poll(self, consumer_id: str) -> list[dict[str, Any]]:
+        """Return findings published since this consumer's last poll."""
+        cursor = self._cursors.get(consumer_id, 0)
+        self._cursors[consumer_id] = len(self._findings)
+        return self._findings[cursor:]
+
+    @property
+    def all_findings(self) -> list[dict[str, Any]]:
+        return list(self._findings)
+
+
 class BuildAgent:
     """An autonomous agent that works on assigned tasks.
 
@@ -39,6 +76,7 @@ class BuildAgent:
         deadline: Deadline,
         ui: ConsoleUI | None = None,
         tokens: TokenTracker | None = None,
+        feed: AuditFeed | None = None,
     ) -> None:
         self.agent_id = agent_id
         self.provider = provider
@@ -48,6 +86,7 @@ class BuildAgent:
         self.deadline = deadline
         self.ui = ui
         self.tokens = tokens
+        self.feed = feed
         self._tool_call_count = 0
 
     async def run(
@@ -108,6 +147,12 @@ class BuildAgent:
                 )
                 break
 
+            # Surface new audit findings before the next LLM turn so the
+            # worker can course-correct instead of building on broken files
+            audit_message = self._poll_audit_feed()
+            if audit_message:
+                messages.append(Message(role="user", content=audit_message))
+
             response = await self.provider.complete(messages, tools=tool_schemas)
             if self.tokens:
                 self.tokens.add(response.usage)
@@ -152,6 +197,28 @@ class BuildAgent:
                 )
 
         return tasks
+
+    def _poll_audit_feed(self) -> str | None:
+        """Check the audit feed for new findings and format them as a correction prompt."""
+        if self.feed is None:
+            return None
+        findings = self.feed.poll(self.agent_id)
+        if not findings:
+            return None
+
+        self.event_log.emit(
+            phase=Phase.BUILD.value,
+            event_type="audit.feedback",
+            summary=f"[{self.agent_id}] Received {len(findings)} audit finding(s)",
+            data={"agent_id": self.agent_id, "findings": findings},
+        )
+
+        lines = "\n".join(f"- [{f.get('type', 'issue')}] {f.get('message', '')}" for f in findings)
+        return (
+            f"⚠ AUDIT ALERT — the audit agent found issue(s) in the workspace:\n{lines}\n"
+            "If any of these relate to files you wrote or your assigned tasks, "
+            "fix them now before continuing. Otherwise, continue your tasks."
+        )
 
     async def _execute_tool_calls(
         self,
@@ -245,33 +312,40 @@ class AuditAgent:
         event_log: EventLog,
         deadline: Deadline,
         ui: ConsoleUI | None = None,
+        feed: AuditFeed | None = None,
     ) -> None:
         self.dispatcher = dispatcher
         self.context = context
         self.event_log = event_log
         self.deadline = deadline
         self.ui = ui
+        self.feed = feed if feed is not None else AuditFeed()
 
     async def run_continuous(self, check_interval: float = 20.0) -> list[dict[str, Any]]:
-        """Run periodic validation checks. Returns list of findings."""
-        findings: list[dict[str, Any]] = []
+        """Run periodic validation checks. Returns list of findings.
 
+        New findings are published to the audit feed so worker agents can
+        pick them up and fix issues mid-build.
+        """
         # Wait for workers to write some files first
         await asyncio.sleep(min(check_interval, self.deadline.phase_remaining(Phase.BUILD) / 3))
 
         while not self.deadline.is_expired() and self.deadline.phase_remaining(Phase.BUILD) > 30:
             check_result = await self._run_checks()
             if check_result:
-                findings.extend(check_result)
-                self.event_log.emit(
-                    phase=Phase.BUILD.value,
-                    event_type="audit.finding",
-                    summary=f"Audit found {len(check_result)} issue(s)",
-                    data={"findings": check_result},
-                )
+                # Publish to the shared feed; only genuinely new findings
+                # (deduplicated by type + message) get logged and surfaced
+                new_findings = self.feed.publish(check_result)
+                if new_findings:
+                    self.event_log.emit(
+                        phase=Phase.BUILD.value,
+                        event_type="audit.finding",
+                        summary=f"Audit found {len(new_findings)} new issue(s)",
+                        data={"findings": new_findings},
+                    )
             await asyncio.sleep(check_interval)
 
-        return findings
+        return self.feed.all_findings
 
     async def _run_checks(self) -> list[dict[str, Any]]:
         """Run quick validation checks on the workspace."""

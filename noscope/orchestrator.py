@@ -286,6 +286,8 @@ class Orchestrator:
                 event_log,
                 deadline,
                 ui=self.ui,
+                provider=self.provider,
+                tokens=tokens,
             )
             self.ui.acceptance_results(acceptance_results)
 

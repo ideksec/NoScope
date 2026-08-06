@@ -124,8 +124,12 @@ class RequestPhase:
         return Confirm.ask("    Approve?", default=True)
 
 
+MAX_HARDEN_REPAIRS = 2  # total repair sessions across the phase (bounds cost/time)
+MAX_REPAIR_ITERATIONS = 8  # tool-call turns per repair session
+
+
 class HardenPhase:
-    """Run acceptance checks and validation."""
+    """Run acceptance checks; optionally repair a failing check and re-run it."""
 
     async def run(
         self,
@@ -136,6 +140,8 @@ class HardenPhase:
         event_log: EventLog,
         deadline: Deadline,
         ui: ConsoleUI | None = None,
+        provider: LLMProvider | None = None,
+        tokens: TokenTracker | None = None,
     ) -> list[dict[str, Any]]:
         event_log.emit(
             phase=Phase.HARDEN.value,
@@ -157,6 +163,8 @@ class HardenPhase:
             if ap.cmd:
                 checks.append((ap.name, ap.cmd, ap.expect_output))
 
+        repairs_left = MAX_HARDEN_REPAIRS
+
         for name, cmd, expect in checks:
             if deadline.is_expired() or deadline.should_transition(Phase.HARDEN):
                 results.append({"name": name, "cmd": cmd, "passed": False, "skipped": True})
@@ -165,22 +173,26 @@ class HardenPhase:
             if ui:
                 ui.tool_activity("check", name, deadline)
 
-            result = await dispatcher.dispatch(
-                "exec_command", {"command": cmd, "timeout": 30}, context
-            )
-            exit_ok = result.status == "ok"
-            # A check passes only if the command succeeds AND, when an expected
-            # output is given, that text actually appears — so a check asserts
-            # behavior rather than just "the process started".
-            output_ok = expect is None or expect in result.display
-            passed = exit_ok and output_ok
+            passed, reason, output = await self._run_check(dispatcher, context, cmd, expect)
+            repaired = False
 
-            if not exit_ok:
-                reason = "command failed"
-            elif not output_ok:
-                reason = f"expected output not found: {expect!r}"
-            else:
-                reason = ""
+            # A failing check gets one bounded fix-and-retry when a provider is
+            # available and there's still repair budget and phase time.
+            if (
+                not passed
+                and provider is not None
+                and repairs_left > 0
+                and not deadline.is_expired()
+                and not deadline.should_transition(Phase.HARDEN)
+            ):
+                repairs_left -= 1
+                if ui:
+                    ui.tool_activity("repair", f"fixing: {name}", deadline)
+                await self._attempt_repair(
+                    name, cmd, expect, output, dispatcher, context, provider, deadline, tokens
+                )
+                passed, reason, output = await self._run_check(dispatcher, context, cmd, expect)
+                repaired = passed
 
             results.append(
                 {
@@ -189,16 +201,19 @@ class HardenPhase:
                     "expect": expect,
                     "passed": passed,
                     "reason": reason,
-                    "output": result.display[:1000],
+                    "repaired": repaired,
+                    "output": output[:1000],
                 }
             )
 
             event_log.emit(
                 phase=Phase.HARDEN.value,
                 event_type="acceptance.check",
-                summary=f"{'✓' if passed else '✗'} {name}" + (f" ({reason})" if reason else ""),
+                summary=f"{'✓' if passed else '✗'} {name}"
+                + (" (repaired)" if repaired else "")
+                + (f" ({reason})" if reason and not passed else ""),
                 data={"name": name, "cmd": cmd, "expect": expect},
-                result={"passed": passed, "reason": reason},
+                result={"passed": passed, "reason": reason, "repaired": repaired},
             )
 
         event_log.emit(
@@ -208,6 +223,84 @@ class HardenPhase:
         )
 
         return results
+
+    async def _run_check(
+        self,
+        dispatcher: ToolDispatcher,
+        context: ToolContext,
+        cmd: str,
+        expect: str | None,
+    ) -> tuple[bool, str, str]:
+        """Run one check; a pass needs exit 0 and (if given) the expected output."""
+        result = await dispatcher.dispatch("exec_command", {"command": cmd, "timeout": 30}, context)
+        exit_ok = result.status == "ok"
+        output_ok = expect is None or expect in result.display
+        if not exit_ok:
+            reason = "command failed"
+        elif not output_ok:
+            reason = f"expected output not found: {expect!r}"
+        else:
+            reason = ""
+        return exit_ok and output_ok, reason, result.display
+
+    async def _attempt_repair(
+        self,
+        name: str,
+        cmd: str,
+        expect: str | None,
+        output: str,
+        dispatcher: ToolDispatcher,
+        context: ToolContext,
+        provider: LLMProvider,
+        deadline: Deadline,
+        tokens: TokenTracker | None,
+    ) -> None:
+        """Run a small bounded agent to fix whatever made the check fail."""
+        expect_line = f"\nIt must also contain: {expect!r}" if expect else ""
+        system = f"""\
+An acceptance check for this project failed. Fix the underlying cause so the
+check passes. The project is in {context.workspace}.
+
+Failing check: {name}
+Command: {cmd}{expect_line}
+
+Command output:
+{output[:1500]}
+
+Inspect the relevant files (read_file, search_files) and fix the code or config
+(edit_file, write_file). Keep the change minimal and targeted at this failure —
+do not rewrite unrelated files. You do not need to re-run the check yourself;
+the harness re-runs it after you finish.
+"""
+        messages: list[Message] = [
+            Message(role="system", content=system),
+            Message(role="user", content=f"Fix the failing check: {name}."),
+        ]
+        tool_schemas = [
+            ToolSchema(name=s["name"], description=s["description"], parameters=s["parameters"])
+            for s in dispatcher.to_schemas()
+        ]
+
+        for _i in range(MAX_REPAIR_ITERATIONS):
+            if deadline.is_expired() or deadline.should_transition(Phase.HARDEN):
+                return
+            response = await provider.complete(messages, tools=tool_schemas, effort="medium")
+            if tokens:
+                tokens.add(response.usage)
+            messages.append(
+                Message(role="assistant", content=response.content, tool_calls=response.tool_calls)
+            )
+            if not response.tool_calls:
+                return
+            for tc in response.tool_calls:
+                result = await dispatcher.dispatch(tc.name, tc.arguments, context)
+                messages.append(
+                    Message(
+                        role="tool",
+                        content=result.display or json.dumps(result.data),
+                        tool_call_id=tc.id,
+                    )
+                )
 
 
 class VerifyPhase:

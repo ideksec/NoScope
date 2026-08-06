@@ -148,6 +148,57 @@ class TestHardenPhase:
         assert by_name["nomatch"]["passed"] is False
         assert "expected output not found" in by_name["nomatch"]["reason"]
 
+    async def test_repair_makes_a_failing_check_pass(
+        self, tool_context: ToolContext, event_log: EventLog
+    ) -> None:
+        # The check greps for a file that doesn't exist yet, so it fails first.
+        # The repair "agent" writes that file; the re-run then passes.
+        from noscope.tools.filesystem import WriteFileTool
+
+        dispatcher = self._dispatcher()
+        dispatcher.register(WriteFileTool())
+
+        fix = LLMResponse(
+            tool_calls=[
+                ToolCall(
+                    id="w1",
+                    name="write_file",
+                    arguments={"path": "marker.txt", "content": "READY\n"},
+                )
+            ],
+            usage=Usage(),
+        )
+        provider = _ToolProvider([fix])
+
+        plan = PlanOutput(
+            acceptance_plan=[
+                AcceptancePlan(name="marker", cmd="cat marker.txt", expect_output="READY")
+            ]
+        )
+        spec = SpecInput(name="T", timebox="5m")
+        results = await HardenPhase().run(
+            plan,
+            spec,
+            dispatcher,
+            tool_context,
+            event_log,
+            tool_context.deadline,
+            provider=provider,
+        )
+        assert results[0]["passed"] is True
+        assert results[0]["repaired"] is True
+
+    async def test_no_repair_without_provider(
+        self, tool_context: ToolContext, event_log: EventLog
+    ) -> None:
+        plan = PlanOutput(acceptance_plan=[AcceptancePlan(name="x", cmd="false")])
+        spec = SpecInput(name="T", timebox="5m")
+        results = await HardenPhase().run(
+            plan, spec, self._dispatcher(), tool_context, event_log, tool_context.deadline
+        )
+        assert results[0]["passed"] is False
+        assert results[0]["repaired"] is False
+
 
 @pytest.mark.asyncio
 class TestRequestPhase:

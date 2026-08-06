@@ -122,41 +122,38 @@ alerts.
 
 ## 3. Strategic decision
 
-**Rebuild the execution layer on the Claude Agent SDK; keep NoScope as the
-product layer.**
+**Build out NoScope's own agent harness. Do not wrap the Claude Agent SDK.**
 
-The Claude Agent SDK (`claude-agent-sdk`) ships the harness NoScope hand-rolls
-today: the agent loop, built-in Read/Write/**Edit**/Bash/Glob/Grep/WebSearch
-tools, context management/compaction, subagents, hooks, and a permission
-system. Rebuilding on it means:
+NoScope's purpose is to be a compelling, self-contained demonstration of
+time-boxed autonomous AI — a way to learn agent orchestration, show it off, and
+run quick "sculpt" POCs. That purpose is the deciding factor.
 
-- NoScope's ~2,000 lines of loop/tools/provider plumbing (agents.py,
-  supervisor worker loop, tools/filesystem, tools/shell duplication, the
-  streaming dead code) shrink to configuration + hooks.
-- We inherit an edit tool, search tools, and context management on day one —
-  three of our biggest capability gaps — for free.
-- Every future model/API change (new model IDs, thinking semantics, caching)
-  is absorbed by the SDK instead of by us. The last six months proved we do
-  not keep up by hand.
+The rejected alternative was to rebuild the execution layer on the Claude Agent
+SDK (Claude Code packaged as a library). It would have made builds more reliable
+with less code to maintain — but the Claude Agent SDK *is* Claude Code, so
+NoScope would become "Claude Code with a timer and a permission prompt." For a
+tool whose value is the orchestration itself, that guts the point: if it's a
+thin wrapper, people can just use Claude Code. It's also Anthropic-only, which
+would kill the provider-agnostic story.
 
-**What NoScope keeps and owns (the differentiated layer):**
+So the harness stays hand-rolled and owned — the agent loop, the tool registry,
+the multi-agent supervisor, the provider abstraction. The work ahead is to make
+that harness genuinely good rather than to outsource it:
 
-- `Deadline` — wall-clock timebox with phase budgets, driving cancellation.
-- **Capability model** → reimplemented as SDK permission hooks (approve/deny
-  per tool class), which is strictly stronger than today's coarse gate.
-- **Spec format + contract** — unchanged; it holds up well.
-- **Event log** → fed from SDK hooks, with per-call token/cost attribution
-  added (today we only log a grand total).
-- **Phases + handoff report** — the run lifecycle and the always-produced
-  artifact/report remain the product.
+- Close the capability gaps that make builds unreliable (editing, search,
+  real verification) with our own well-tested tools.
+- Keep the provider abstraction (Anthropic + OpenAI) as a real feature.
+- Own the model/API churn deliberately — Phase 1 already showed it's tractable
+  (structured outputs, caching, thinking, SDK-native retries) when the LLM
+  layer is small and well-factored.
 
-**Trade-off accepted:** the SDK is Anthropic-only. The OpenAI provider is
-demoted from "co-equal backend" to "not in v0.2" (see §5). Keeping true
-provider parity means continuing to own a bespoke harness forever — that cost
-is what killed the last six months. If provider-agnosticism turns out to be a
-real adoption requirement, the fallback design is the Anthropic *tool runner*
-+ OpenAI Responses API behind our existing provider protocol — but not for the
-next release.
+**What this costs us, honestly:** we keep maintaining the harness, and we chase
+model/API changes ourselves (the thing that rotted the project the first time).
+Phase 1's changes are the mitigation — a thin, well-tested LLM layer where a
+model swap is a one-line default and the modern features degrade gracefully.
+The differentiators from §1 (timebox engine, capability/approval model, spec
+contract, event log, guaranteed handoff) all stay, and now they sit on a
+harness we can actually demo and explain.
 
 ## 4. Roadmap
 
@@ -206,49 +203,46 @@ survives the Phase 2 re-architecture (planner, prompts, verification design).
 - [x] SDK-native retries (`max_retries`, honors `Retry-After`, covers
       429/5xx/timeouts) replace the hand-rolled loop. Dead `stream()` path removed.
 
-### Phase 2 — Re-architecture on the Claude Agent SDK
+### Phase 2 — Build out the owned harness (capability gaps)
 
-Goal: NoScope becomes the timebox/capability/contract harness around SDK-run
-agents.
+Goal: give NoScope's own agents the tools a credible harness needs, so builds
+are reliable enough to demo. Every tool is ours, tested, and capability-gated.
 
-- [ ] Replace `BuildAgent`/tool dispatcher internals with `claude-agent-sdk`
-      `query()` sessions: one session per work stream, system prompt from our
-      phase templates, cwd = workspace.
-- [ ] Capabilities → SDK permission hooks: `WORKSPACE_RW`/`SHELL_EXEC`/`GIT`
-      map to tool allow/deny lists; `--danger` maps to permissive mode; the
-      REQUEST phase approves the hook policy instead of a homegrown gate.
-- [ ] Deadline → session control: cancel sessions at phase boundaries; inject
-      time-remaining via hook-driven system reminders instead of fake user
-      turns.
-- [ ] Event log → SDK hooks (tool-use pre/post), keeping our JSONL format and
-      redaction, now with correct phases and per-call usage.
-- [ ] Supervisor keeps task partitioning (union-find + topo sort — recent, keep)
-      but delegates execution; audit agent becomes a real checker (run
-      lint/build/import checks via a cheap model session, feed findings back —
-      the AuditFeed mechanism from Aug 2026 carries over).
-- [ ] Retire: hand-rolled filesystem/shell tools (SDK built-ins + our
-      permission hooks), the custom Docker tool layer (prefer: run the whole
-      NoScope process inside a container; document `--sandbox` as
-      containerized-run rather than per-tool `docker cp` choreography).
-- [ ] Decide OpenAI provider fate explicitly in CHANGELOG (park with warning,
-      or delete).
+- [x] `edit_file` — exact-string replacement with a uniqueness guard and a
+      returned diff, replacing whole-file rewrites for edits. Mutations now run
+      sequentially so same-file edits can't race.
+- [ ] Search + discovery tools: `search_files` (regex/grep across the tree) and
+      `find_files` (glob) so agents stop discovering code one `list_directory`
+      at a time.
+- [ ] Partial reads: `read_file` gains optional line `offset`/`limit` so large
+      files don't dump whole into context.
+- [ ] Docker sandbox correctness (from §2.3/§2.4): fix the heredoc write
+      corruption and path injection, validate paths, use an image with the
+      toolchain the plan actually needs (or document Python-only), and keep git
+      operating on the real tree. Or replace per-tool `docker cp` choreography
+      with running the whole NoScope process in a container.
+- [ ] Context management: cap/summarize the ever-growing agent history and the
+      50 KB shell dumps so long runs don't die on context length.
+- [ ] Make `MAX_WORKERS` configurable rather than a hardcoded rate-limit posture.
 
 ### Phase 3 — Verification that actually verifies
 
 Goal: replace model-as-oracle with independent checks — this is the credibility
-core of "you always get a runnable artifact."
+core of "you always get a runnable artifact," and the most demo-visible upgrade.
 
 - [ ] Acceptance checks: keep `cmd:` checks but add expected-output assertions
       (`cmd: ... expect: <substring|status>`); run them from code, not prompts.
 - [ ] Replace the `VERIFIED:` sentinel-string protocol with a structured
       verdict (structured output schema: status, evidence, failures) from a
-      fresh-context verifier session that did not build the code.
+      fresh-context verifier that did not build the code. (Structured outputs
+      from Phase 1 make this clean.)
 - [ ] HARDEN gains a bounded repair loop (budgeted by the phase deadline):
       failing check → targeted fix session → re-run check.
-- [ ] Task completion requires evidence: `mark_task_complete` accepts a claim
-      that the audit checker can spot-verify against the workspace.
+- [ ] Turn the audit agent into a real checker: run lint/build/import checks
+      via the cheap fast model and feed findings back through the existing
+      `AuditFeed`; task completion accepts a claim the checker can spot-verify.
 - [ ] Adopt API task budgets (`output_config.task_budget`) so agents pace to a
-      token budget the same way the Deadline paces wall-clock — the two
+      token budget the same way the `Deadline` paces wall-clock — the two
       budgets are the product's core promise, now enforced in both dimensions.
 
 ### Phase 4 — Release readiness
@@ -266,12 +260,12 @@ core of "you always get a runnable artifact."
 
 | Item | Decision |
 |---|---|
-| Textual TUI (`ui/tui.py`, `--tui`) | Delete. Never wired up; Rich console is sufficient. |
-| Panic mode | Delete or implement in the Deadline→session cancellation path; no half-state. |
-| OpenAI provider | Park in Phase 2 (warning + known-broken list) — revisit only if adoption demands it. |
-| Per-tool Docker choreography (`tools/docker.py`) | Replace with containerized-process sandboxing. |
+| Textual TUI (`ui/tui.py`, `--tui`) | Deleted in Phase 0. Never wired up; Rich console is sufficient. |
+| Panic mode | Deleted in Phase 0. Revisit only if the timebox UX needs an explicit end-game state. |
+| OpenAI provider | **Keep** — provider-agnosticism is a real feature under the owned-harness direction (§3). Modernized in Phase 1. |
+| Per-tool Docker choreography (`tools/docker.py`) | Fix in place (Phase 2) or replace with containerized-process sandboxing; do not ship it broken. |
 | `risk_policy`, `repo_mode`, `secrets:` grants | Delete from spec schema until a phase actually consumes them. |
-| Hand-rolled retries, `stream()` dead code, duplicate pricing tables | Delete in Phases 0–1. |
+| Hand-rolled retries, `stream()` dead code, duplicate pricing tables | Deleted in Phases 0–1. |
 
 ## 6. Success criteria for "worth releasing"
 

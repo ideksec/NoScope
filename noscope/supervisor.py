@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from noscope.agents import AuditAgent, BuildAgent
+from noscope.agents import AuditAgent, AuditFeed, BuildAgent
 from noscope.deadline import Deadline, Phase
 from noscope.llm.base import LLMProvider
 from noscope.logging.events import EventLog
@@ -131,6 +131,7 @@ class Supervisor:
             )
 
         # Phase 2: Parallel workers on remaining tasks
+        audit_findings: list[object] = []
         if remaining_tasks and not self.deadline.is_expired():
             streams = self._partition_tasks(remaining_tasks)
             num_workers = len(streams)
@@ -152,6 +153,9 @@ class Supervisor:
                 },
             )
 
+            # Shared feed: audit publishes findings, workers poll and fix
+            feed = AuditFeed()
+
             worker_coros = []
             for i, stream in enumerate(streams):
                 agent = BuildAgent(
@@ -163,6 +167,7 @@ class Supervisor:
                     deadline=self.deadline,
                     ui=self.ui,
                     tokens=self.tokens,
+                    feed=feed,
                 )
                 prompt = self._worker_prompt(plan, workspace, stream, i)
                 worker_coros.append(agent.run(stream, prompt))
@@ -174,6 +179,7 @@ class Supervisor:
                 event_log=self.event_log,
                 deadline=self.deadline,
                 ui=self.ui,
+                feed=feed,
             )
             audit_coro = audit.run_continuous()
 
@@ -193,13 +199,23 @@ class Supervisor:
                         data={"agent": label, "error": str(result), "type": type(result).__name__},
                     )
 
+            # The final gather slot is the audit agent's findings
+            last_result = gather_results[-1] if gather_results else None
+            if isinstance(last_result, list):
+                audit_findings = last_result
+
         # Summary
         completed = sum(1 for t in all_tasks if t.completed)
         self.event_log.emit(
             phase=Phase.BUILD.value,
             event_type="supervisor.done",
-            summary=f"Build complete: {completed}/{len(all_tasks)} tasks done",
-            data={"completed": completed, "total": len(all_tasks)},
+            summary=f"Build complete: {completed}/{len(all_tasks)} tasks done"
+            + (f", {len(audit_findings)} audit finding(s)" if audit_findings else ""),
+            data={
+                "completed": completed,
+                "total": len(all_tasks),
+                "audit_findings": audit_findings,
+            },
         )
 
         return all_tasks
@@ -228,48 +244,78 @@ class Supervisor:
     def _partition_tasks(self, tasks: list[PlanTask]) -> list[list[PlanTask]]:
         """Partition tasks into parallel work streams.
 
-        Uses task dependencies if available, otherwise round-robin assignment.
-        Limits to MAX_WORKERS streams.
+        Builds the full dependency graph and groups each transitively-connected
+        component into a single stream, so a worker never waits on files owned
+        by another worker. Streams are ordered topologically (plan order as
+        tiebreak) and merged down to at most MAX_WORKERS.
         """
         if not tasks:
             return []
 
-        # Group by dependency chains
-        streams: list[list[PlanTask]] = []
-        assigned: set[str] = set()
+        task_ids = {t.id for t in tasks}
+        order = {t.id: i for i, t in enumerate(tasks)}
 
-        # First pass: group tasks that depend on each other
+        # Union-find over dependency edges (ignoring deps outside this task
+        # set, e.g. the already-completed setup task)
+        parent = {t.id: t.id for t in tasks}
+
+        def find(x: str) -> str:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a: str, b: str) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[rb] = ra
+
         for task in tasks:
-            if task.id in assigned:
-                continue
+            for dep in task.depends_on:
+                if dep in task_ids:
+                    union(dep, task.id)
 
-            chain = [task]
-            assigned.add(task.id)
+        # Collect components, preserving plan order within and across them
+        components: dict[str, list[PlanTask]] = {}
+        for task in tasks:
+            components.setdefault(find(task.id), []).append(task)
+        streams = [self._topo_sort(chain) for chain in components.values()]
 
-            # Find tasks that depend on this one
-            for other in tasks:
-                if other.id not in assigned and task.id in other.depends_on:
-                    chain.append(other)
-                    assigned.add(other.id)
-
-            streams.append(chain)
-
-        # If we have more streams than workers, merge small ones
+        # Merge the smallest streams until we're within the worker limit
         while len(streams) > MAX_WORKERS:
-            # Merge the two shortest streams
             streams.sort(key=len)
             smallest = streams.pop(0)
-            streams[0] = smallest + streams[0]
-
-        # If we have unassigned tasks, distribute round-robin
-        unassigned = [t for t in tasks if t.id not in assigned]
-        for i, task in enumerate(unassigned):
-            idx = i % len(streams) if streams else 0
-            if not streams:
-                streams.append([])
-            streams[idx].append(task)
+            merged = sorted(smallest + streams[0], key=lambda t: order[t.id])
+            streams[0] = merged
 
         return streams
+
+    @staticmethod
+    def _topo_sort(tasks: list[PlanTask]) -> list[PlanTask]:
+        """Order tasks so dependencies come before dependents (plan order as tiebreak).
+
+        Tasks in a dependency cycle fall back to plan order at the end.
+        """
+        task_ids = {t.id for t in tasks}
+        emitted: set[str] = set()
+        result: list[PlanTask] = []
+        pending = list(tasks)
+
+        while pending:
+            ready = [
+                t
+                for t in pending
+                if all(dep in emitted or dep not in task_ids for dep in t.depends_on)
+            ]
+            if not ready:  # dependency cycle — emit remaining in plan order
+                result.extend(pending)
+                break
+            for t in ready:
+                emitted.add(t.id)
+                result.append(t)
+            pending = [t for t in pending if t.id not in emitted]
+
+        return result
 
     def _setup_structure_prompt(self, plan: PlanOutput, workspace: Path) -> str:
         return f"""\

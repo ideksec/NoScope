@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from noscope.agents import AuditAgent, BuildAgent
+from noscope.agents import AuditAgent, AuditFeed, BuildAgent
 from noscope.deadline import Deadline
 from noscope.llm.base import LLMResponse, Message, StreamChunk, ToolCall, ToolSchema, Usage
 from noscope.planning.models import PlanTask
@@ -149,6 +149,45 @@ class TestSupervisor:
         supervisor = Supervisor.__new__(Supervisor)
         assert supervisor._partition_tasks([]) == []
 
+    def test_partition_groups_transitive_chains(self) -> None:
+        # t4 -> t3 -> t2 is a transitive chain: all three must share a stream
+        # even though t4 never directly names t2 (issue #3)
+        supervisor = Supervisor.__new__(Supervisor)
+        tasks = [
+            PlanTask(id="t2", title="Models", kind="edit", depends_on=["t1"]),
+            PlanTask(id="t3", title="API", kind="edit", depends_on=["t2"]),
+            PlanTask(id="t5", title="Docs", kind="edit", depends_on=["t1"]),
+            PlanTask(id="t4", title="Frontend", kind="edit", depends_on=["t3"]),
+        ]
+        streams = supervisor._partition_tasks(tasks)
+        chain_stream = next(s for s in streams if any(t.id == "t2" for t in s))
+        chain_ids = [t.id for t in chain_stream]
+        assert "t3" in chain_ids
+        assert "t4" in chain_ids
+        # Dependencies come before dependents within the stream
+        assert chain_ids.index("t2") < chain_ids.index("t3") < chain_ids.index("t4")
+        # Independent task lands in its own stream
+        assert any(t.id == "t5" for s in streams for t in s if s is not chain_stream)
+
+    def test_partition_respects_max_workers(self) -> None:
+        from noscope.supervisor import MAX_WORKERS
+
+        supervisor = Supervisor.__new__(Supervisor)
+        tasks = [PlanTask(id=f"t{i}", title=f"Task {i}", kind="edit") for i in range(2, 10)]
+        streams = supervisor._partition_tasks(tasks)
+        assert len(streams) <= MAX_WORKERS
+        all_ids = {t.id for s in streams for t in s}
+        assert all_ids == {t.id for t in tasks}
+
+    def test_topo_sort_handles_cycles(self) -> None:
+        tasks = [
+            PlanTask(id="t2", title="A", kind="edit", depends_on=["t3"]),
+            PlanTask(id="t3", title="B", kind="edit", depends_on=["t2"]),
+        ]
+        # Cycle must not hang; falls back to plan order
+        result = Supervisor._topo_sort(tasks)
+        assert [t.id for t in result] == ["t2", "t3"]
+
     def test_split_setup_with_no_setup_keyword(self) -> None:
         supervisor = Supervisor.__new__(Supervisor)
         tasks = [
@@ -159,6 +198,72 @@ class TestSupervisor:
         # First task should always be setup
         assert len(setup) == 1
         assert setup[0].id == "t1"
+
+
+class TestAuditFeed:
+    def test_publish_dedupes_by_type_and_message(self) -> None:
+        feed = AuditFeed()
+        finding = {"type": "invalid_json", "message": "package.json is invalid"}
+        assert feed.publish([finding]) == [finding]
+        # Same finding republished (audit re-detects each cycle) is dropped
+        assert feed.publish([dict(finding)]) == []
+        other = {"type": "invalid_json", "message": "tsconfig.json is invalid"}
+        assert feed.publish([other]) == [other]
+        assert feed.all_findings == [finding, other]
+
+    def test_poll_tracks_per_consumer_cursors(self) -> None:
+        feed = AuditFeed()
+        f1 = {"type": "missing_files", "message": "no entry point"}
+        f2 = {"type": "invalid_json", "message": "bad package.json"}
+        feed.publish([f1])
+        assert feed.poll("worker-0") == [f1]
+        assert feed.poll("worker-0") == []  # already seen
+        feed.publish([f2])
+        assert feed.poll("worker-0") == [f2]
+        # A different consumer sees everything from the start
+        assert feed.poll("worker-1") == [f1, f2]
+
+    @pytest.mark.asyncio
+    async def test_build_agent_injects_audit_findings(self, tool_context: ToolContext) -> None:
+        from noscope.logging.events import EventLog, RunDir
+        from noscope.tools.dispatcher import ToolDispatcher
+
+        seen_messages: list[list[Message]] = []
+
+        class RecordingProvider(FakeProvider):
+            async def complete(
+                self,
+                messages: list[Message],
+                tools: list[ToolSchema] | None = None,
+                model: str | None = None,
+                json_schema: dict[str, Any] | None = None,
+            ) -> LLMResponse:
+                seen_messages.append(list(messages))
+                return await super().complete(messages, tools, model, json_schema)
+
+        feed = AuditFeed()
+        feed.publish([{"type": "invalid_json", "message": "package.json is invalid"}])
+
+        run_dir = RunDir(base=tool_context.workspace.parent / "runs")
+        event_log = EventLog(run_dir)
+        agent = BuildAgent(
+            agent_id="worker-0",
+            provider=RecordingProvider([]),
+            dispatcher=ToolDispatcher(),
+            context=tool_context,
+            event_log=event_log,
+            deadline=tool_context.deadline,
+            feed=feed,
+        )
+        await agent.run([PlanTask(id="t1", title="Build", kind="edit")], "You are a builder.")
+        event_log.close()
+
+        assert seen_messages, "provider was never called"
+        injected = [
+            m for m in seen_messages[-1] if m.role == "user" and "AUDIT ALERT" in (m.content or "")
+        ]
+        assert len(injected) == 1
+        assert "package.json is invalid" in injected[0].content
 
 
 class TestAuditAgent:

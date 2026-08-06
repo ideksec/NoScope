@@ -187,20 +187,24 @@ Goal: `main` runs again on today's APIs. No re-architecture.
 Goal: the existing loop stops leaving free wins on the table. Everything here
 survives the Phase 2 re-architecture (planner, prompts, verification design).
 
-- [ ] Planner: structured outputs (`output_config.format` from
-      `PlanOutput.model_json_schema()`), adaptive thinking + `effort: high`.
-      Delete the JSON-repair retry loop.
-- [ ] Prompt caching: `cache_control` on system prompts + tool schemas;
-      surface cache-read/write tokens in the cost summary.
-- [ ] Prompt rewrite pass: de-shout, de-duplicate, drop the hardcoded stack
-      ladder and shell incantations; move to goal + constraints style (current
-      models follow instructions literally — the 2025 style now over-triggers).
-- [ ] Per-role models: cheap fast model (Haiku 4.5) for the audit agent and
-      handoff report; default model for build; high-effort for planning.
+- [x] Planner: structured outputs (`output_config.format` from
+      `PlanOutput.model_json_schema()`, prepared with `additionalProperties:
+      false`), adaptive thinking + `effort: high`. JSON-repair loop reduced to
+      a single corrective re-ask.
+- [~] Prompt caching: `cache_control` on system prompts + tool schemas — done.
+      Surfacing cache-read/write tokens in the cost summary is deferred to
+      Phase 4 (real cost reporting; needs `Usage` to carry cache tokens).
+- [x] Prompt rewrite pass: VERIFY and planner prompts moved to goal +
+      constraints style; kept timebox-scaled ambition as genuine product logic.
+      (Supervisor setup/worker prompts still to de-shout.)
+- [~] Per-role models: handoff report runs on the fast model (Haiku 4.5) at
+      low effort; planner runs at high effort. Audit agent doesn't call an LLM
+      yet — its fast-model use lands with the real checker in Phase 3.
 - [ ] Token accounting: per-call usage into the event log; per-agent
-      attribution in the final summary.
-- [ ] Use SDK-native retries (`max_retries`, honors `Retry-After`) and delete
-      the hand-rolled retry code. Delete the dead `stream()` path.
+      attribution in the final summary. (Deferred — Phase 2 restructures the
+      loop; folds into Phase 4 cost reporting.)
+- [x] SDK-native retries (`max_retries`, honors `Retry-After`, covers
+      429/5xx/timeouts) replace the hand-rolled loop. Dead `stream()` path removed.
 
 ### Phase 2 — Re-architecture on the Claude Agent SDK
 

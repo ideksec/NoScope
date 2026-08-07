@@ -27,6 +27,12 @@ review and roadmap.
   harness blocked until the orphan happened to exit. Children now run in their
   own session and a timeout terminates the whole group. Same fix for the
   `docker exec` client and for Ctrl+C on `--serve`.
+- **BUILD no longer idles waiting for the audit agent.** The auditor loops
+  until the phase is nearly over, and it was gathered together with the
+  workers — so a build that genuinely finished early still blocked for the
+  rest of BUILD's budget before HARDEN could start (on a 30-minute run, up to
+  ~16 wasted minutes). It's now cancelled once the workers return; findings
+  are read from the shared feed, so none are lost.
 - `noscope doctor` exits non-zero when a requirement is missing, so it works as
   a gate — and no longer counts "OpenAI key not set" as a failure when a valid
   Anthropic key is present.

@@ -15,6 +15,7 @@ from noscope.conflicts import WriteLedger
 from noscope.deadline import Deadline, Phase
 from noscope.errors import format_run_error
 from noscope.llm import create_provider, default_model_for, resolve_provider_name
+from noscope.llm.bounded import DeadlineBoundProvider
 from noscope.logging.events import EventLog, RunDir
 from noscope.phases import (
     HandoffPhase,
@@ -175,6 +176,15 @@ class Orchestrator:
 
         # 4. Start deadline
         deadline = Deadline(spec.timebox_seconds)
+
+        # The deadline is cooperative — agents check it between iterations, so
+        # it cannot interrupt a request already in flight. Bounding each call
+        # here is what makes the timebox a real guarantee rather than a best
+        # effort; without it one stalled request (600s SDK default, times
+        # retries) could outlast the whole run.
+        self.provider = DeadlineBoundProvider(
+            self.provider, deadline, max_seconds=self.settings.request_timeout
+        )
 
         # Set up tools — route ALL operations through Docker when sandbox is active
         docker_sandbox: DockerSandbox | None = None

@@ -69,3 +69,13 @@ class TestFormatRunError:
         out = format_run_error(ValueError("plain problem"))
         assert "ValueError" in out
         assert "plain problem" in out
+
+
+class TestRequestTimeoutExplanation:
+    def test_request_timeout_names_the_knob(self) -> None:
+        from noscope.llm.bounded import RequestTimeoutError
+
+        out = explain_error(RequestTimeoutError("timed out"))
+        assert out is not None
+        assert "NOSCOPE_REQUEST_TIMEOUT" in out
+        assert "--time" in out

@@ -27,6 +27,12 @@ review and roadmap.
   harness blocked until the orphan happened to exit. Children now run in their
   own session and a timeout terminates the whole group. Same fix for the
   `docker exec` client and for Ctrl+C on `--serve`.
+- **A stalled model request can no longer outrun the timebox.** The deadline is
+  cooperative — checked between agent iterations — so it could not interrupt a
+  request in flight, and both SDKs default to a 600s read timeout with retries
+  on top. Every provider call now goes through a `DeadlineBoundProvider` capped
+  at `NOSCOPE_REQUEST_TIMEOUT` (120s) or the remaining timebox, whichever is
+  smaller, with a floor so HANDOFF can still produce its report.
 - **BUILD no longer idles waiting for the audit agent.** The auditor loops
   until the phase is nearly over, and it was gathered together with the
   workers — so a build that genuinely finished early still blocked for the

@@ -167,6 +167,15 @@ output" guarantee is enforced. A few decisions worth a closer look
   tokens the same way. The product's promise is a spend guarantee — enforced in
   both dimensions.
 
+  Cooperative checks happen *between* iterations, so they can't interrupt a
+  request already in flight — and both SDKs default to a 600-second read
+  timeout, with retries on top. Every provider call is therefore wrapped by a
+  `DeadlineBoundProvider` that caps it at `NOSCOPE_REQUEST_TIMEOUT` (120s) or
+  the remaining timebox, whichever is smaller. That's what makes the deadline a
+  guarantee rather than a best effort. The one deliberate exception is a floor
+  so HANDOFF — which runs *after* the deadline by design — can still write its
+  report.
+
 - **Parallel build with dependency-aware partitioning.** A supervisor splits
   setup into concurrent structure + deps agents, then partitions the remaining
   tasks with union-find over the dependency graph (+ topological sort) so

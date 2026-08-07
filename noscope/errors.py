@@ -41,6 +41,13 @@ def explain_error(exc: BaseException, provider: str = "anthropic", model: str = 
             f"  Verify with: uv run noscope doctor --live"
         )
 
+    if name == "RequestTimeoutError":
+        return (
+            "A model request was abandoned so it couldn't outrun the timebox.\n"
+            "  Fix: raise NOSCOPE_REQUEST_TIMEOUT (default 120s) if your model\n"
+            "       legitimately needs longer, or use a larger --time."
+        )
+
     if name == "PermissionDeniedError" or status == 403:
         return (
             f"The {provider} API key lacks permission for this request"

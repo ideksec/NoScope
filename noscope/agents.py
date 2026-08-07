@@ -6,6 +6,7 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
+from noscope.context import trim_history, truncate_tool_output
 from noscope.deadline import Deadline, Phase
 from noscope.llm.base import LLMProvider, Message, ToolCall, ToolSchema
 from noscope.logging.events import EventLog
@@ -162,6 +163,10 @@ class BuildAgent:
             if audit_message:
                 messages.append(Message(role="user", content=audit_message))
 
+            # Keep the conversation inside the context budget — a request that
+            # fails on length would cost this worker its remaining tasks.
+            messages = trim_history(messages)
+
             response = await self.provider.complete(messages, tools=tool_schemas)
             if self.tokens:
                 self.tokens.add(response.usage)
@@ -292,7 +297,7 @@ class BuildAgent:
             results.append(
                 Message(
                     role="tool",
-                    content=result.display or json.dumps(result.data),
+                    content=truncate_tool_output(result.display or json.dumps(result.data)),
                     tool_call_id=tc.id,
                 )
             )
@@ -306,7 +311,7 @@ class BuildAgent:
         result = await self.dispatcher.dispatch(tc.name, tc.arguments, self.context)
         return Message(
             role="tool",
-            content=result.display or json.dumps(result.data),
+            content=truncate_tool_output(result.display or json.dumps(result.data)),
             tool_call_id=tc.id,
         )
 

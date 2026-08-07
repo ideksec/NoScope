@@ -10,6 +10,7 @@ from noscope.capabilities import (
     CapabilityGrant,
     CapabilityRequest,
 )
+from noscope.context import trim_history, truncate_tool_output
 from noscope.deadline import Deadline, Phase
 from noscope.llm.base import LLMProvider, Message, ToolSchema, Usage
 from noscope.logging.events import EventLog
@@ -309,6 +310,7 @@ the harness re-runs it after you finish.
                 return
             if tokens is not None and tokens.exceeded():
                 return
+            messages = trim_history(messages)
             response = await provider.complete(messages, tools=tool_schemas, effort="medium")
             if tokens:
                 tokens.add(response.usage)
@@ -322,7 +324,7 @@ the harness re-runs it after you finish.
                 messages.append(
                     Message(
                         role="tool",
-                        content=result.display or json.dumps(result.data),
+                        content=truncate_tool_output(result.display or json.dumps(result.data)),
                         tool_call_id=tc.id,
                     )
                 )
@@ -410,6 +412,7 @@ the blocker instead of looping.
             if tokens is not None and tokens.exceeded():
                 return self._fail(event_log, "Token budget reached during verification")
 
+            messages = trim_history(messages)
             response = await provider.complete(messages, tools=tool_schemas)
             if tokens:
                 tokens.add(response.usage)
@@ -449,7 +452,7 @@ the blocker instead of looping.
                 messages.append(
                     Message(
                         role="tool",
-                        content=result.display or json.dumps(result.data),
+                        content=truncate_tool_output(result.display or json.dumps(result.data)),
                         tool_call_id=tc.id,
                     )
                 )

@@ -58,6 +58,28 @@ Everything that could run long consults it:
 The deadline is *cooperative* — it doesn't kill threads, it gives every loop a
 cheap check so they wind down and the pipeline advances to HANDOFF.
 
+### The hole cooperative checking leaves
+
+Checks happen *between* iterations, so nothing consults the deadline while a
+request is in flight — and both SDKs default to a 600-second read timeout with
+retries stacked on top. One stalled call could therefore outlast a five-minute
+timebox entirely. That isn't a degraded guarantee; it's no guarantee.
+
+So every provider call is wrapped by
+[`DeadlineBoundProvider`](noscope/llm/bounded.py), which caps it at
+`NOSCOPE_REQUEST_TIMEOUT` (120s) or the remaining timebox, whichever is
+smaller. Two properties make it worth doing this way:
+
+- The `wait_for` sits *outside* the SDK call, so the bound covers the SDK's
+  internal retries too, not just one attempt.
+- It's applied once, in the orchestrator, so every call site — plan, agents,
+  harden, verify, handoff — is covered without any of them knowing about it.
+
+There's one deliberate exception: a floor, because HANDOFF runs *after* the
+deadline by design. The floor applies to the remaining timebox rather than to
+the configured cap, so a deliberately small `NOSCOPE_REQUEST_TIMEOUT` is still
+honored — it guards against an expired deadline, not against a choice.
+
 ## Multi-agent build
 
 BUILD is the most concurrent part. The [`Supervisor`](noscope/supervisor.py)
@@ -266,7 +288,8 @@ rather than aspirational.
 | **Own agent harness, not a wrapper over the Claude Agent SDK** | The orchestration *is* the project. Wrapping the SDK (Claude Code as a library) would make it "Claude Code with a timer" and give up provider-agnosticism. See [`PLAN.md`](PLAN.md) §3 for the full trade-off. |
 | **Execute checks, don't trust the model** | Model-as-oracle verification is the worst failure mode for a demo. HARDEN and VERIFY both ground their verdicts in commands the harness runs. |
 | **`edit_file` with a uniqueness guard, not whole-file rewrites** | Whole-file writes were the dominant token cost and caused last-write-wins clobbering; an edit that would match ambiguously *fails* rather than changing the wrong region. |
-| **Cooperative deadline, not forced cancellation** | Cheap per-loop checks wind agents down cleanly so the pipeline always reaches HANDOFF, instead of killing work mid-write. |
+| **Cooperative deadline, not forced cancellation** | Cheap per-loop checks wind agents down cleanly so the pipeline always reaches HANDOFF, instead of killing work mid-write. The one thing cooperation can't cover — a request already in flight — is bounded at the provider boundary instead. |
+| **Agents tolerate a few failed LLM calls, then stand down** | Tasks are partitioned into per-worker streams, so an exception escaping one agent used to silently cost that worker every remaining task. Three consecutive failures is enough to distinguish a blip from an outage without burning the timebox retrying. |
 | **Capability gating + dedicated tools over raw bash** | Typed, gated tools can be path-checked, approved, logged, and redacted; an opaque bash string can't. |
 | **Thin, single-file LLM layer** | Owning the harness means owning API churn; keeping the provider layer tiny makes a model/API change a one-line default, not a refactor. |
 
@@ -280,5 +303,8 @@ Honest boundaries (tracked in [`PLAN.md`](PLAN.md) and [`RELEASE.md`](RELEASE.md
   for provider rate limits.
 - The shell safety filter is a deny-list — a backstop, not a sandbox. Untrusted
   specs should use `--sandbox`.
-- Live end-to-end behavior is validated by hand (see `RELEASE.md`), not in CI —
-  CI has no API key.
+- Live end-to-end behavior against a real model is validated by hand (see
+  `RELEASE.md`), since CI has no API key. CI does run the full pipeline on
+  every push via `--dry-run`, so the harness itself — CLI, capability gating,
+  tool dispatch, phase budgets, acceptance checks, reporting — is covered; what
+  isn't covered is model quality and the live provider wire format.

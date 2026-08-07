@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from noscope.capabilities import Capability
-from noscope.tools.base import Tool, ToolContext, ToolResult
+from noscope.tools.base import Tool, ToolContext, ToolResult, record_write
 from noscope.tools.redaction import redact_text
 from noscope.tools.safety import check_command_safety
 from noscope.tools.shell import kill_process_group
@@ -364,7 +364,8 @@ class DockerWriteFileTool(Tool):
         ok, err = await self._docker._write_in_container(args["path"], args["content"])
         if not ok:
             return ToolResult.error(f"Failed to write: {err}")
-        return ToolResult.ok(display=f"Wrote {args['path']}", path=args["path"])
+        warning = record_write(context, args["path"], args["content"])
+        return ToolResult.ok(display=f"Wrote {args['path']}{warning}", path=args["path"])
 
 
 class DockerListDirectoryTool(Tool):

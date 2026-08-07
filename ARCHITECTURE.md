@@ -104,6 +104,26 @@ The audit agent isn't just an existence check: it compile-checks Python (and
 parses JavaScript where `node` is available), so a file that cannot even parse
 is surfaced to the worker that wrote it while there's still time to fix it.
 
+### Write conflicts
+
+Partitioning reduces overlap; it can't eliminate it, because the file
+assignment ultimately comes from a model. So writes are also tracked at
+runtime. A [`WriteLedger`](noscope/conflicts.py) records the last writer of
+each path; when a *different* agent overwrites it with *different* content,
+three things happen:
+
+1. The clobbering agent gets a warning appended to its tool output — the only
+   channel back into its conversation — telling it to re-read before editing.
+2. A `write.conflict` event is logged.
+3. The handoff report gets a "Parallel Write Conflicts" section, appended
+   after generation so the model writing the report cannot omit it.
+
+Writes are warned about, not blocked. Overlap is sometimes legitimate — a
+worker adding a dependency to a manifest the setup agent created — and a
+harness that refuses writes mid-build would fail more runs than it saves. The
+failure being defended against is the silent one: two workers both "succeed",
+last write wins, and the run reports a clean build over discarded work.
+
 ## Tools and capability gating
 
 Agents don't touch the machine directly. Every action goes through a

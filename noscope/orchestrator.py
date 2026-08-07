@@ -11,6 +11,7 @@ from rich.console import Console
 
 from noscope.capabilities import CapabilityStore
 from noscope.config.settings import NoscopeSettings
+from noscope.conflicts import WriteLedger
 from noscope.deadline import Deadline, Phase
 from noscope.errors import format_run_error
 from noscope.llm import create_provider, default_model_for, resolve_provider_name
@@ -234,6 +235,9 @@ class Orchestrator:
         acceptance_results: list[dict[str, Any]] = []
         plan_output: PlanOutput | None = None
         verify_data: tuple[bool, str] | None = None
+        # Declared out here because HANDOFF reads it even when an earlier
+        # phase raised before BUILD ever created the agents.
+        write_ledger = WriteLedger()
 
         try:
             # 5. PLAN phase
@@ -279,6 +283,8 @@ class Orchestrator:
 
             # 8. BUILD phase
             self.ui.phase_banner(Phase.BUILD, "Building MVP...", deadline.format_remaining())
+            # The ledger is shared across every agent; each agent gets a context
+            # copy carrying its own id, so overlapping writes are attributable.
             tool_context = ToolContext(
                 workspace=workspace,
                 capabilities=cap_store,
@@ -286,6 +292,7 @@ class Orchestrator:
                 deadline=deadline,
                 secrets=_runtime_secrets(self.settings),
                 danger_mode=self.settings.danger_mode,
+                write_ledger=write_ledger,
             )
 
             supervisor = Supervisor(
@@ -301,6 +308,11 @@ class Orchestrator:
             tasks = await supervisor.run(plan_output, workspace)
             completed = sum(1 for t in tasks if t.completed)
             self.ui.console.print(f"  Completed [cyan]{completed}/{len(tasks)}[/cyan] tasks")
+
+            if write_ledger.conflicts:
+                # Say it out loud. Silently losing a worker's output while
+                # reporting a clean build is the worst outcome available.
+                self.ui.console.print(f"  [yellow]{write_ledger.summary()}[/yellow]")
 
             # 9. HARDEN phase
             self.ui.phase_banner(
@@ -372,6 +384,7 @@ class Orchestrator:
                 workspace=workspace,
                 verify_result=verify_data,
                 report_model=self._report_model,
+                write_conflicts=write_ledger.summary(),
             )
         except Exception as e:
             event_log.emit(

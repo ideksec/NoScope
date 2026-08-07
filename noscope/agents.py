@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -83,7 +84,9 @@ class BuildAgent:
         self.agent_id = agent_id
         self.provider = provider
         self.dispatcher = dispatcher
-        self.context = context
+        # Own copy of the context stamped with this agent's id, so the write
+        # ledger (which stays shared) can attribute each write to its author.
+        self.context = replace(context, agent_id=agent_id)
         self.event_log = event_log
         self.deadline = deadline
         self.ui = ui

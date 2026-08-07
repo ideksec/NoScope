@@ -6,7 +6,7 @@ import difflib
 from typing import Any
 
 from noscope.capabilities import Capability
-from noscope.tools.base import Tool, ToolContext, ToolResult
+from noscope.tools.base import Tool, ToolContext, ToolResult, record_write
 from noscope.tools.safety import resolve_workspace_path
 
 
@@ -85,7 +85,8 @@ class WriteFileTool(Tool):
         path = resolve_workspace_path(args["path"], context.workspace)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(args["content"], encoding="utf-8")
-        return ToolResult.ok(display=f"Wrote {path}", path=str(path))
+        warning = record_write(context, args["path"], args["content"])
+        return ToolResult.ok(display=f"Wrote {path}{warning}", path=str(path))
 
 
 class EditFileTool(Tool):
@@ -154,11 +155,12 @@ class EditFileTool(Tool):
 
         updated = original.replace(old_string, new_string)
         path.write_text(updated, encoding="utf-8")
+        warning = record_write(context, args["path"], updated)
 
         diff = _unified_diff(original, updated, args["path"])
         replaced = count if replace_all else 1
         return ToolResult.ok(
-            display=f"Edited {args['path']} ({replaced} replacement(s))\n{diff}",
+            display=f"Edited {args['path']} ({replaced} replacement(s)){warning}\n{diff}",
             path=str(path),
             replacements=replaced,
         )

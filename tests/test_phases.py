@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -243,3 +244,55 @@ class TestHandoffPhase:
         assert "Test" in report
         assert "Build it" in report
         event_log.close()
+
+    async def test_write_conflicts_are_appended_not_prompted(self, tmp_path: Path) -> None:
+        # The body of the report is model-written, so a conflict passed as a
+        # prompt hint could simply be left out. Overwritten work is exactly the
+        # gap a handoff must name, so it's appended after generation instead.
+        class _Provider:
+            async def complete(self, messages: Any, **kwargs: Any) -> LLMResponse:
+                return LLMResponse(content="# Report\n\nAll good.", usage=Usage())
+
+        rd = RunDir(base=tmp_path / "runs")
+        event_log = EventLog(rd)
+        out = tmp_path / "handoff.md"
+
+        report = await HandoffPhase().run(
+            SpecInput(name="Test", timebox="5m"),
+            PlanOutput(tasks=[]),
+            [],
+            [],
+            _Provider(),  # type: ignore[arg-type]
+            event_log,
+            Deadline(300),
+            out,
+            write_conflicts="app.py was written by worker-1, then overwritten by worker-2",
+        )
+        event_log.close()
+
+        assert "Parallel Write Conflicts" in report
+        assert "worker-1" in report
+        # And it reached disk, not just the return value.
+        assert "worker-2" in out.read_text()
+
+    async def test_no_conflicts_means_no_extra_section(self, tmp_path: Path) -> None:
+        class _Provider:
+            async def complete(self, messages: Any, **kwargs: Any) -> LLMResponse:
+                return LLMResponse(content="# Report\n\nAll good.", usage=Usage())
+
+        rd = RunDir(base=tmp_path / "runs")
+        event_log = EventLog(rd)
+
+        report = await HandoffPhase().run(
+            SpecInput(name="Test", timebox="5m"),
+            PlanOutput(tasks=[]),
+            [],
+            [],
+            _Provider(),  # type: ignore[arg-type]
+            event_log,
+            Deadline(300),
+            tmp_path / "handoff.md",
+        )
+        event_log.close()
+
+        assert "Parallel Write Conflicts" not in report

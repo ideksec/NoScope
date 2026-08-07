@@ -573,6 +573,7 @@ class HandoffPhase:
         workspace: Path | None = None,
         verify_result: tuple[bool, str] | None = None,
         report_model: str | None = None,
+        write_conflicts: str = "",
     ) -> str:
         event_log.emit(
             phase=Phase.HANDOFF.value,
@@ -677,6 +678,16 @@ Write the report with these sections:
                 summary=f"LLM handoff report failed, using fallback: {e}",
             )
             report = self._fallback_report(spec, completed, incomplete, acceptance_results)
+
+        if write_conflicts:
+            # Appended rather than prompted, so the model can't leave it out.
+            # Overwritten work is exactly the kind of gap a handoff must name.
+            report = (
+                f"{report.rstrip()}\n\n## Parallel Write Conflicts\n\n"
+                f"{write_conflicts}\n\n"
+                "Check these files — a later agent may have discarded an "
+                "earlier one's work.\n"
+            )
 
         output_path.write_text(report, encoding="utf-8")
 

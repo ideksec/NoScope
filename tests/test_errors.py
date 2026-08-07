@@ -59,7 +59,9 @@ class TestExplainError:
 
 class TestFormatRunError:
     def test_known_error_includes_diagnosis_and_details(self) -> None:
-        out = format_run_error(_FakeError("AuthenticationError", msg="bad key"), provider="anthropic")
+        out = format_run_error(
+            _FakeError("AuthenticationError", msg="bad key"), provider="anthropic"
+        )
         assert "NOSCOPE_ANTHROPIC_API_KEY" in out
         assert "bad key" in out
 

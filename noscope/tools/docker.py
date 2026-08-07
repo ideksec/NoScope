@@ -18,6 +18,7 @@ from noscope.capabilities import Capability
 from noscope.tools.base import Tool, ToolContext, ToolResult
 from noscope.tools.redaction import redact_text
 from noscope.tools.safety import check_command_safety
+from noscope.tools.shell import kill_process_group
 
 DOCKER_IMAGE = "python:3.12-slim"
 DOCKER_MEMORY_LIMIT = "1g"
@@ -151,10 +152,14 @@ class DockerSandbox:
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except TimeoutError:
+            # Reap the `docker exec` client; otherwise it lingers attached to
+            # the container, holding its pipes, for the rest of the run.
+            await kill_process_group(proc)
             return 124, "", f"Command timed out after {timeout}s"
 
         return (

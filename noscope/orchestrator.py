@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from typing import Any
@@ -477,7 +478,10 @@ def _detect_launch(workspace: Path) -> tuple[str | None, str]:
 async def _run_server(command: str, workspace: Path) -> None:
     """Start the server and let the user interact with it. Blocks until Ctrl+C."""
     import asyncio
+    import os
     import signal
+
+    from noscope.tools.shell import kill_process_group
 
     env = build_execution_env()
 
@@ -487,6 +491,10 @@ async def _run_server(command: str, workspace: Path) -> None:
         env=env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        # Its own session, so Ctrl+C takes down the whole server tree rather
+        # than just the shell — otherwise the dev server survives and the port
+        # stays bound.
+        start_new_session=True,
     )
 
     try:
@@ -497,11 +505,13 @@ async def _run_server(command: str, workspace: Path) -> None:
                 break
             print(line.decode("utf-8", errors="replace"), end="")
     except (KeyboardInterrupt, asyncio.CancelledError):
-        proc.send_signal(signal.SIGTERM)
+        # Ask the tree to stop politely first; servers flush and close ports.
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
         try:
             await asyncio.wait_for(proc.wait(), timeout=5)
         except TimeoutError:
-            proc.kill()
+            await kill_process_group(proc)
 
 
 def _workspace_has_files(workspace: Path) -> bool:

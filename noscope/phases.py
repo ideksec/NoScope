@@ -10,6 +10,7 @@ from noscope.capabilities import (
     CapabilityGrant,
     CapabilityRequest,
 )
+from noscope.context import trim_history, truncate_tool_output
 from noscope.deadline import Deadline, Phase
 from noscope.llm.base import LLMProvider, Message, ToolSchema, Usage
 from noscope.logging.events import EventLog
@@ -309,6 +310,7 @@ the harness re-runs it after you finish.
                 return
             if tokens is not None and tokens.exceeded():
                 return
+            messages = trim_history(messages)
             response = await provider.complete(messages, tools=tool_schemas, effort="medium")
             if tokens:
                 tokens.add(response.usage)
@@ -322,7 +324,7 @@ the harness re-runs it after you finish.
                 messages.append(
                     Message(
                         role="tool",
-                        content=result.display or json.dumps(result.data),
+                        content=truncate_tool_output(result.display or json.dumps(result.data)),
                         tool_call_id=tc.id,
                     )
                 )
@@ -410,6 +412,7 @@ the blocker instead of looping.
             if tokens is not None and tokens.exceeded():
                 return self._fail(event_log, "Token budget reached during verification")
 
+            messages = trim_history(messages)
             response = await provider.complete(messages, tools=tool_schemas)
             if tokens:
                 tokens.add(response.usage)
@@ -449,7 +452,7 @@ the blocker instead of looping.
                 messages.append(
                     Message(
                         role="tool",
-                        content=result.display or json.dumps(result.data),
+                        content=truncate_tool_output(result.display or json.dumps(result.data)),
                         tool_call_id=tc.id,
                     )
                 )
@@ -570,6 +573,7 @@ class HandoffPhase:
         workspace: Path | None = None,
         verify_result: tuple[bool, str] | None = None,
         report_model: str | None = None,
+        write_conflicts: str = "",
     ) -> str:
         event_log.emit(
             phase=Phase.HANDOFF.value,
@@ -674,6 +678,16 @@ Write the report with these sections:
                 summary=f"LLM handoff report failed, using fallback: {e}",
             )
             report = self._fallback_report(spec, completed, incomplete, acceptance_results)
+
+        if write_conflicts:
+            # Appended rather than prompted, so the model can't leave it out.
+            # Overwritten work is exactly the kind of gap a handoff must name.
+            report = (
+                f"{report.rstrip()}\n\n## Parallel Write Conflicts\n\n"
+                f"{write_conflicts}\n\n"
+                "Check these files — a later agent may have discarded an "
+                "earlier one's work.\n"
+            )
 
         output_path.write_text(report, encoding="utf-8")
 

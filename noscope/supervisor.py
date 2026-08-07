@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,8 +20,9 @@ if TYPE_CHECKING:
     from noscope.phases import TokenTracker
     from noscope.ui.console import ConsoleUI
 
-# Maximum parallel workers (beyond setup agent).
-# Keep at 2 to avoid API rate limits with concurrent LLM streams.
+# Default maximum parallel workers (beyond the setup agents). Conservative by
+# default to stay under provider rate limits with concurrent LLM streams;
+# override per run with --workers / NOSCOPE_MAX_WORKERS.
 MAX_WORKERS = 2
 
 
@@ -42,7 +44,9 @@ class Supervisor:
         deadline: Deadline,
         ui: ConsoleUI | None = None,
         tokens: TokenTracker | None = None,
+        max_workers: int = MAX_WORKERS,
     ) -> None:
+        self.max_workers = max(1, max_workers)
         self.provider = provider
         self.dispatcher = dispatcher
         self.context = context
@@ -182,28 +186,36 @@ class Supervisor:
                 ui=self.ui,
                 feed=feed,
             )
-            audit_coro = audit.run_continuous()
+            # The auditor loops until BUILD is nearly over, so it must not be
+            # gathered alongside the workers — that made a build which finished
+            # early sit idle for the rest of BUILD's budget before HARDEN could
+            # start, spending the timebox this tool exists to protect.
+            audit_task = asyncio.ensure_future(audit.run_continuous())
 
-            # Run workers and audit concurrently
             gather_results: list[object] = list(
-                await asyncio.gather(*worker_coros, audit_coro, return_exceptions=True)
+                await asyncio.gather(*worker_coros, return_exceptions=True)
             )
+
+            # Workers are done; stop auditing. Findings already published are
+            # kept — the feed accumulates them, so cancelling loses nothing.
+            audit_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await audit_task
+            audit_findings = list(feed.all_findings)
 
             # Log any worker exceptions (don't let failures go silent)
             for i, result in enumerate(gather_results):  # type: ignore[assignment]
                 if isinstance(result, BaseException):
-                    label = f"worker-{i}" if i < len(worker_coros) else "audit"
                     self.event_log.emit(
                         phase=Phase.BUILD.value,
                         event_type="agent.error",
-                        summary=f"Agent {label} failed: {result}",
-                        data={"agent": label, "error": str(result), "type": type(result).__name__},
+                        summary=f"Agent worker-{i} failed: {result}",
+                        data={
+                            "agent": f"worker-{i}",
+                            "error": str(result),
+                            "type": type(result).__name__,
+                        },
                     )
-
-            # The final gather slot is the audit agent's findings
-            last_result = gather_results[-1] if gather_results else None
-            if isinstance(last_result, list):
-                audit_findings = last_result
 
         # Summary
         completed = sum(1 for t in all_tasks if t.completed)
@@ -283,7 +295,7 @@ class Supervisor:
         streams = [self._topo_sort(chain) for chain in components.values()]
 
         # Merge the smallest streams until we're within the worker limit
-        while len(streams) > MAX_WORKERS:
+        while len(streams) > self.max_workers:
             streams.sort(key=len)
             smallest = streams.pop(0)
             merged = sorted(smallest + streams[0], key=lambda t: order[t.id])

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from typing import Any
@@ -10,8 +11,11 @@ from rich.console import Console
 
 from noscope.capabilities import CapabilityStore
 from noscope.config.settings import NoscopeSettings
+from noscope.conflicts import WriteLedger
 from noscope.deadline import Deadline, Phase
+from noscope.errors import format_run_error
 from noscope.llm import create_provider, default_model_for, resolve_provider_name
+from noscope.llm.bounded import DeadlineBoundProvider
 from noscope.logging.events import EventLog, RunDir
 from noscope.phases import (
     HandoffPhase,
@@ -35,6 +39,7 @@ from noscope.tools.docker import (
     DockerSandbox,
     DockerShellTool,
     DockerWriteFileTool,
+    preflight_docker,
 )
 from noscope.tools.filesystem import (
     CreateDirectoryTool,
@@ -58,16 +63,29 @@ from noscope.ui.console import ConsoleUI
 class Orchestrator:
     """Orchestrates the full NoScope run lifecycle."""
 
-    def __init__(self, settings: NoscopeSettings, console: Console | None = None) -> None:
+    def __init__(
+        self,
+        settings: NoscopeSettings,
+        console: Console | None = None,
+        dry_run: bool = False,
+    ) -> None:
         self.settings = settings
-        self.provider = create_provider(settings)
+        self.dry_run = dry_run
+        if dry_run:
+            from noscope.llm.dryrun import DryRunProvider
+
+            self.provider: Any = DryRunProvider()
+        else:
+            self.provider = create_provider(settings)
         self.ui = ConsoleUI(console)
         self._provider_name = resolve_provider_name(settings)
         self._model = settings.default_model or default_model_for(self._provider_name)
         # fast_model is an Anthropic model id; only apply it on the Anthropic
         # provider, and never override an explicit --model.
         self._report_model = (
-            settings.fast_model
+            None
+            if dry_run
+            else settings.fast_model
             if self._provider_name == "anthropic" and settings.default_model is None
             else None
         )
@@ -159,11 +177,32 @@ class Orchestrator:
         # 4. Start deadline
         deadline = Deadline(spec.timebox_seconds)
 
+        # The deadline is cooperative — agents check it between iterations, so
+        # it cannot interrupt a request already in flight. Bounding each call
+        # here is what makes the timebox a real guarantee rather than a best
+        # effort; without it one stalled request (600s SDK default, times
+        # retries) could outlast the whole run.
+        self.provider = DeadlineBoundProvider(
+            self.provider, deadline, max_seconds=self.settings.request_timeout
+        )
+
         # Set up tools — route ALL operations through Docker when sandbox is active
         docker_sandbox: DockerSandbox | None = None
         dispatcher = ToolDispatcher()
 
         if sandbox:
+            # Fail here, before PLAN — a sandbox that dies mid-build has already
+            # burned tokens and timebox for nothing.
+            problem = await preflight_docker()
+            if problem:
+                self.ui.console.print(f"\n[red]Sandbox unavailable[/red]\n  {problem}\n")
+                event_log.emit(
+                    phase="INIT",
+                    event_type="run.aborted",
+                    summary="Docker sandbox unavailable",
+                    data={"reason": problem},
+                )
+                return run_dir.path
             docker_sandbox = DockerSandbox(workspace)
             await docker_sandbox.ensure_running()
             self.ui.console.print(
@@ -206,6 +245,9 @@ class Orchestrator:
         acceptance_results: list[dict[str, Any]] = []
         plan_output: PlanOutput | None = None
         verify_data: tuple[bool, str] | None = None
+        # Declared out here because HANDOFF reads it even when an earlier
+        # phase raised before BUILD ever created the agents.
+        write_ledger = WriteLedger()
 
         try:
             # 5. PLAN phase
@@ -251,6 +293,8 @@ class Orchestrator:
 
             # 8. BUILD phase
             self.ui.phase_banner(Phase.BUILD, "Building MVP...", deadline.format_remaining())
+            # The ledger is shared across every agent; each agent gets a context
+            # copy carrying its own id, so overlapping writes are attributable.
             tool_context = ToolContext(
                 workspace=workspace,
                 capabilities=cap_store,
@@ -258,6 +302,7 @@ class Orchestrator:
                 deadline=deadline,
                 secrets=_runtime_secrets(self.settings),
                 danger_mode=self.settings.danger_mode,
+                write_ledger=write_ledger,
             )
 
             supervisor = Supervisor(
@@ -268,10 +313,16 @@ class Orchestrator:
                 deadline=deadline,
                 ui=self.ui,
                 tokens=tokens,
+                max_workers=self.settings.max_workers,
             )
             tasks = await supervisor.run(plan_output, workspace)
             completed = sum(1 for t in tasks if t.completed)
             self.ui.console.print(f"  Completed [cyan]{completed}/{len(tasks)}[/cyan] tasks")
+
+            if write_ledger.conflicts:
+                # Say it out loud. Silently losing a worker's output while
+                # reporting a clean build is the worst outcome available.
+                self.ui.console.print(f"  [yellow]{write_ledger.summary()}[/yellow]")
 
             # 9. HARDEN phase
             self.ui.phase_banner(
@@ -317,7 +368,12 @@ class Orchestrator:
                 summary=f"Run error: {e}",
                 data={"error": str(e), "type": type(e).__name__},
             )
-            self.ui.console.print(f"\n[red]Error:[/red] {e}")
+            # Explain the failure in terms the user can act on (bad key, wrong
+            # model, rate limit, ...) instead of leaving a bare exception.
+            self.ui.console.print(
+                f"\n[red]Run failed:[/red] "
+                f"{format_run_error(e, provider=self._provider_name, model=self._model)}"
+            )
             if not tasks and plan_output is not None:
                 tasks = plan_output.tasks
 
@@ -338,6 +394,7 @@ class Orchestrator:
                 workspace=workspace,
                 verify_result=verify_data,
                 report_model=self._report_model,
+                write_conflicts=write_ledger.summary(),
             )
         except Exception as e:
             event_log.emit(
@@ -457,7 +514,10 @@ def _detect_launch(workspace: Path) -> tuple[str | None, str]:
 async def _run_server(command: str, workspace: Path) -> None:
     """Start the server and let the user interact with it. Blocks until Ctrl+C."""
     import asyncio
+    import os
     import signal
+
+    from noscope.tools.shell import kill_process_group
 
     env = build_execution_env()
 
@@ -467,6 +527,10 @@ async def _run_server(command: str, workspace: Path) -> None:
         env=env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        # Its own session, so Ctrl+C takes down the whole server tree rather
+        # than just the shell — otherwise the dev server survives and the port
+        # stays bound.
+        start_new_session=True,
     )
 
     try:
@@ -477,11 +541,13 @@ async def _run_server(command: str, workspace: Path) -> None:
                 break
             print(line.decode("utf-8", errors="replace"), end="")
     except (KeyboardInterrupt, asyncio.CancelledError):
-        proc.send_signal(signal.SIGTERM)
+        # Ask the tree to stop politely first; servers flush and close ports.
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
         try:
             await asyncio.wait_for(proc.wait(), timeout=5)
         except TimeoutError:
-            proc.kill()
+            await kill_process_group(proc)
 
 
 def _workspace_has_files(workspace: Path) -> bool:

@@ -21,14 +21,53 @@ review and roadmap.
   correct phase on tool events.
 - The planner no longer swallows API errors as "invalid plan".
 - Git subprocesses run with the sanitized environment (API keys were visible).
+- **Timed-out commands no longer leak their process trees.** Killing the shell
+  left grandchildren (a dev server, say) running as orphans still holding the
+  output pipes, so the port stayed bound for the rest of the run and the
+  harness blocked until the orphan happened to exit. Children now run in their
+  own session and a timeout terminates the whole group. Same fix for the
+  `docker exec` client and for Ctrl+C on `--serve`.
+- **A stalled model request can no longer outrun the timebox.** The deadline is
+  cooperative — checked between agent iterations — so it could not interrupt a
+  request in flight, and both SDKs default to a 600s read timeout with retries
+  on top. Every provider call now goes through a `DeadlineBoundProvider` capped
+  at `NOSCOPE_REQUEST_TIMEOUT` (120s) or the remaining timebox, whichever is
+  smaller, with a floor so HANDOFF can still produce its report.
+- **BUILD no longer idles waiting for the audit agent.** The auditor loops
+  until the phase is nearly over, and it was gathered together with the
+  workers — so a build that genuinely finished early still blocked for the
+  rest of BUILD's budget before HARDEN could start (on a 30-minute run, up to
+  ~16 wasted minutes). It's now cancelled once the workers return; findings
+  are read from the shared feed, so none are lost.
+- `noscope doctor` exits non-zero when a requirement is missing, so it works as
+  a gate — and no longer counts "OpenAI key not set" as a failure when a valid
+  Anthropic key is present.
 - App launch is opt-in via `--serve`; by default NoScope prints the run command
   instead of blocking on a foreground server, honoring the hard-deadline promise.
 - Docker sandbox: file writes use base64 (the old heredoc corrupted backslashes
   and could truncate on content); all container paths are validated against
-  traversal and shell-injection.
+  traversal and shell-injection; container command timeouts are now
+  deadline-aware like the host shell tool.
+- `noscope new` writes its spec with a real YAML dumper — a project name or
+  constraint containing a quote or colon previously produced an invalid file —
+  and slugifies the filename safely.
 
 ### Added
 
+- **`--dry-run`:** exercises the entire pipeline — tools, acceptance checks,
+  verification, event log, handoff report — with no API calls and no tokens,
+  so the harness can be smoke-tested before spending anything.
+- **`doctor --live`:** makes one minimal API call so a bad key or wrong model
+  fails in seconds rather than part-way through a build.
+- **Actionable API errors:** auth failures, unknown models, rate limits,
+  overload, and network errors now print a diagnosis and the fix instead of a
+  bare traceback.
+- **Context management:** tool results are capped and the conversation is
+  trimmed to a character budget before each request, so long runs no longer
+  risk failing on context length (trimming never orphans a tool result).
+- **Real audit checks:** the audit agent compile-checks Python (and parses
+  JavaScript when `node` is available), so broken code is caught during BUILD
+  and fed back to workers instead of only existing files being counted.
 - **Editing and discovery tools:** `edit_file` (exact-string replacement with a
   uniqueness guard + diff, replacing whole-file rewrites), `search_files`
   (regex/grep), `find_files` (glob), and `read_file` line windows.
@@ -40,10 +79,19 @@ review and roadmap.
   the same way the timebox does — the spend guarantee is now true in tokens too.
 - **Cache-aware cost reporting:** the summary shows cached-read tokens and the
   dollars prompt caching saved.
+- **Write-conflict detection:** a shared `WriteLedger` records the last writer
+  of every file, so when parallel agents overwrite each other the clobbering
+  agent is warned in-conversation, a `write.conflict` event is logged, and the
+  handoff report names the affected files. Previously two workers could both
+  "succeed" while one's work was silently discarded.
+- **Sandbox preflight:** `--sandbox` verifies Docker is actually usable before
+  PLAN instead of failing part-way through a build, and distinguishes
+  not-installed from daemon-down. `doctor` reports the daemon, not just the
+  binary on `PATH`.
 - Structured outputs, prompt caching, adaptive thinking + effort, and SDK-native
   retries in the LLM layer; a cheaper model (Haiku) for the handoff report.
-- `--serve` flag; `NOSCOPE_FAST_MODEL`, `NOSCOPE_MAX_TOKENS`, `NOSCOPE_EFFORT`,
-  `NOSCOPE_TOKEN_BUDGET` settings.
+- `--serve` and `--workers` flags; `NOSCOPE_FAST_MODEL`, `NOSCOPE_MAX_TOKENS`,
+  `NOSCOPE_EFFORT`, `NOSCOPE_TOKEN_BUDGET`, `NOSCOPE_MAX_WORKERS` settings.
 
 ### Changed
 
@@ -52,6 +100,10 @@ review and roadmap.
   with version floors.
 - Example specs modernized (`python3`, expected-output checks) and README given
   an honest "When to use NoScope" section.
+- CI now checks formatting and runs a no-key smoke job that drives the real CLI
+  through all six phases, so a broken pipeline fails CI even when every unit
+  test passes. Provider request/response shapes are covered by mocked-SDK tests
+  — previously no SDK call was asserted anywhere.
 
 ### Removed
 

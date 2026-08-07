@@ -6,10 +6,15 @@ on:
   pull_request:
     branches: [main]
 
+# CI only reads the repo; nothing here publishes, comments, or writes.
+permissions:
+  contents: read
+
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.12", "3.13"]
 
@@ -28,8 +33,48 @@ jobs:
       - name: Lint
         run: uv run ruff check noscope/ tests/
 
+      - name: Format check
+        run: uv run ruff format --check noscope/ tests/
+
       - name: Type check
         run: uv run mypy noscope/
 
       - name: Test
         run: uv run pytest tests/ -v --tb=short
+
+  smoke:
+    # Drives the real CLI through all six phases with a scripted provider, so a
+    # broken pipeline fails here even when every unit test still passes. No API
+    # key, no network, no tokens.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Dry run the full pipeline
+        run: uv run noscope run --spec examples/hello-flask.md --time 3m --dir /tmp/smoke --yes --dry-run
+
+      - name: Assert the run produced its artifacts
+        run: |
+          test -f /tmp/smoke/index.html
+          run_dir=$(ls -d .noscope/runs/* | head -1)
+          test -s "$run_dir/handoff.md"
+          test -s "$run_dir/events.jsonl"
+          grep -q '"type": *"run.complete"' "$run_dir/events.jsonl"
+
+      - name: Doctor passes its required checks
+        env:
+          NOSCOPE_ANTHROPIC_API_KEY: ci-placeholder
+        run: uv run noscope doctor
+
+      - name: Doctor fails loudly when no key is configured
+        run: |
+          if uv run noscope doctor; then
+            echo "doctor exited 0 with no API key configured" >&2
+            exit 1
+          fi

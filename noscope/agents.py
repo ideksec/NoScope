@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from noscope.context import trim_history, truncate_tool_output
 from noscope.deadline import Deadline, Phase
 from noscope.llm.base import LLMProvider, Message, ToolCall, ToolSchema
 from noscope.logging.events import EventLog
@@ -18,6 +21,10 @@ if TYPE_CHECKING:
     from noscope.ui.console import ConsoleUI
 
 MAX_AGENT_ITERATIONS = 200
+# Consecutive failed LLM calls before an agent stands down. A transient blip
+# shouldn't cost a worker every remaining task in its stream, but a persistent
+# failure shouldn't burn the timebox retrying either.
+MAX_CONSECUTIVE_LLM_FAILURES = 3
 TIME_STATUS_INTERVAL = 3  # Inject time status every N tool calls
 
 
@@ -81,7 +88,9 @@ class BuildAgent:
         self.agent_id = agent_id
         self.provider = provider
         self.dispatcher = dispatcher
-        self.context = context
+        # Own copy of the context stamped with this agent's id, so the write
+        # ledger (which stays shared) can attribute each write to its author.
+        self.context = replace(context, agent_id=agent_id)
         self.event_log = event_log
         self.deadline = deadline
         self.ui = ui
@@ -133,6 +142,7 @@ class BuildAgent:
             )
         )
 
+        consecutive_failures = 0
         for _iteration in range(MAX_AGENT_ITERATIONS):
             if self.deadline.is_expired() or self.deadline.should_transition(Phase.BUILD):
                 break
@@ -162,7 +172,34 @@ class BuildAgent:
             if audit_message:
                 messages.append(Message(role="user", content=audit_message))
 
-            response = await self.provider.complete(messages, tools=tool_schemas)
+            # Keep the conversation inside the context budget — a request that
+            # fails on length would cost this worker its remaining tasks.
+            messages = trim_history(messages)
+
+            try:
+                response = await self.provider.complete(messages, tools=tool_schemas)
+            except Exception as e:  # noqa: BLE001 — logged and bounded below
+                # A blip on one call must not cost this worker every remaining
+                # task in its stream. Retry a couple of times, then stand down
+                # and let the other workers and HANDOFF carry on.
+                # (CancelledError is a BaseException, so it still propagates.)
+                consecutive_failures += 1
+                self.event_log.emit(
+                    phase=Phase.BUILD.value,
+                    event_type="agent.llm_error",
+                    summary=f"[{self.agent_id}] LLM call failed "
+                    f"({consecutive_failures}/{MAX_CONSECUTIVE_LLM_FAILURES}): {e}",
+                    data={
+                        "agent_id": self.agent_id,
+                        "error": str(e),
+                        "type": type(e).__name__,
+                    },
+                )
+                if consecutive_failures >= MAX_CONSECUTIVE_LLM_FAILURES:
+                    break
+                continue
+
+            consecutive_failures = 0
             if self.tokens:
                 self.tokens.add(response.usage)
 
@@ -292,7 +329,7 @@ class BuildAgent:
             results.append(
                 Message(
                     role="tool",
-                    content=result.display or json.dumps(result.data),
+                    content=truncate_tool_output(result.display or json.dumps(result.data)),
                     tool_call_id=tc.id,
                 )
             )
@@ -306,7 +343,7 @@ class BuildAgent:
         result = await self.dispatcher.dispatch(tc.name, tc.arguments, self.context)
         return Message(
             role="tool",
-            content=result.display or json.dumps(result.data),
+            content=truncate_tool_output(result.display or json.dumps(result.data)),
             tool_call_id=tc.id,
         )
 
@@ -400,7 +437,55 @@ class AuditAgent:
                     {"type": "invalid_requirements", "message": "requirements.txt unreadable"}
                 )
 
+        findings.extend(await self._syntax_findings(workspace))
+
         if self.ui and not findings:
             self.ui.tool_activity("audit", "checks passed", self.deadline)
+
+        return findings
+
+    async def _syntax_findings(self, workspace: Path) -> list[dict[str, Any]]:
+        """Compile-check source files so broken code is caught during BUILD.
+
+        Existence checks alone let a worker keep building on a file that cannot
+        even parse; a syntax error surfaced now is fed back through the audit
+        feed while there is still time to fix it.
+        """
+        findings: list[dict[str, Any]] = []
+
+        if any(workspace.rglob("*.py")):
+            # compileall is quiet on success and names the offending file on failure.
+            result = await self.dispatcher.dispatch(
+                "exec_command",
+                {"command": "python3 -m compileall -q .", "timeout": 20},
+                self.context,
+            )
+            if result.status == "error":
+                findings.append(
+                    {
+                        "type": "syntax_error",
+                        "message": f"Python file(s) fail to compile: {result.display[:300]}",
+                    }
+                )
+
+        js_files = [p for p in workspace.rglob("*.js") if "node_modules" not in p.parts]
+        if js_files:
+            rel = " ".join(f"'{p.relative_to(workspace)}'" for p in js_files[:20])
+            result = await self.dispatcher.dispatch(
+                "exec_command",
+                # Skip silently when node isn't available rather than crying wolf.
+                {
+                    "command": f"command -v node >/dev/null || exit 0; node --check {rel}",
+                    "timeout": 20,
+                },
+                self.context,
+            )
+            if result.status == "error":
+                findings.append(
+                    {
+                        "type": "syntax_error",
+                        "message": f"JavaScript file(s) fail to parse: {result.display[:300]}",
+                    }
+                )
 
         return findings

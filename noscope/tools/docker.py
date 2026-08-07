@@ -11,13 +11,15 @@ import asyncio
 import base64
 import posixpath
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
 from noscope.capabilities import Capability
-from noscope.tools.base import Tool, ToolContext, ToolResult
+from noscope.tools.base import Tool, ToolContext, ToolResult, record_write
 from noscope.tools.redaction import redact_text
 from noscope.tools.safety import check_command_safety
+from noscope.tools.shell import kill_process_group
 
 DOCKER_IMAGE = "python:3.12-slim"
 DOCKER_MEMORY_LIMIT = "1g"
@@ -61,6 +63,54 @@ def build_write_command(rel_path: str, content: str) -> str:
     parent = posixpath.dirname(path)
     mkdir = f"mkdir -p '/workspace/{parent}' && " if parent else ""
     return f"{mkdir}printf %s '{b64}' | base64 -d > '/workspace/{path}'"
+
+
+async def preflight_docker(timeout: float = 15.0) -> str | None:
+    """Check that ``--sandbox`` can actually work. Returns an error, or None.
+
+    Run this *before* the first model call. A sandbox that only fails once the
+    build is underway wastes the timebox and the tokens already spent, and the
+    raw daemon error ("Cannot connect to the Docker daemon at
+    unix:///var/run/docker.sock") doesn't tell the user what to do.
+    """
+    if shutil.which("docker") is None:
+        return (
+            "--sandbox needs Docker, but the `docker` command was not found.\n"
+            "  Fix: install Docker Desktop or the Docker Engine, or drop --sandbox\n"
+            "       to run on the host (commands are still safety-filtered)."
+        )
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker",
+            "info",
+            "--format",
+            "{{.ServerVersion}}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except TimeoutError:
+        await kill_process_group(proc)
+        return (
+            f"The Docker daemon did not respond within {timeout:.0f}s.\n"
+            "  Fix: check that Docker is running, then retry."
+        )
+    except OSError as e:
+        return f"Could not run docker: {e}"
+
+    if proc.returncode != 0:
+        detail = stderr.decode("utf-8", errors="replace").strip().splitlines()
+        first = detail[0] if detail else "unknown error"
+        return (
+            "The `docker` command exists but the daemon is not reachable.\n"
+            "  Fix: start Docker (Docker Desktop, or `sudo systemctl start docker`),\n"
+            "       or drop --sandbox to run on the host.\n"
+            f"  Daemon said: {first}"
+        )
+
+    return None
 
 
 class DockerSandbox:
@@ -151,10 +201,14 @@ class DockerSandbox:
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except TimeoutError:
+            # Reap the `docker exec` client; otherwise it lingers attached to
+            # the container, holding its pipes, for the rest of the run.
+            await kill_process_group(proc)
             return 124, "", f"Command timed out after {timeout}s"
 
         return (
@@ -310,7 +364,8 @@ class DockerWriteFileTool(Tool):
         ok, err = await self._docker._write_in_container(args["path"], args["content"])
         if not ok:
             return ToolResult.error(f"Failed to write: {err}")
-        return ToolResult.ok(display=f"Wrote {args['path']}", path=args["path"])
+        warning = record_write(context, args["path"], args["content"])
+        return ToolResult.ok(display=f"Wrote {args['path']}{warning}", path=args["path"])
 
 
 class DockerListDirectoryTool(Tool):
@@ -411,7 +466,11 @@ class DockerShellTool(Tool):
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         command = args["command"]
-        timeout = min(args.get("timeout", 60), 300)
+        # Match the host shell tool: never let one container command run past a
+        # meaningful share of the remaining timebox.
+        remaining = context.deadline.remaining()
+        dynamic_cap = max(30, int(remaining * 0.15))
+        timeout = min(args.get("timeout", 60), 300, dynamic_cap)
         cwd = args.get("cwd", "/workspace")
 
         # Safety filters still apply unless --danger is set

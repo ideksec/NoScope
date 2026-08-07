@@ -25,6 +25,11 @@ class NoscopeSettings(BaseSettings):
     effort: str = "high"
     # Optional total-token spend cap for a run (a peer to the timebox); None = no cap.
     token_budget: int | None = None
+    # Parallel build workers (beyond the setup agents).
+    max_workers: int = 2
+    # Longest any single LLM request may run. The SDKs default to 600s and
+    # retry on top of that, which is longer than most timeboxes.
+    request_timeout: float = 120.0
     default_timebox: str = "30m"
     danger_mode: bool = False
 

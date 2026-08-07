@@ -12,16 +12,41 @@ from noscope.cli import app
 runner = CliRunner()
 
 
+@pytest.fixture
+def clean_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No ambient keys and no .env pickup, so doctor's verdict is the test's."""
+    for var in (
+        "NOSCOPE_ANTHROPIC_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "NOSCOPE_OPENAI_API_KEY",
+        "OPENAI_API_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.chdir(tmp_path)
+
+
 class TestDoctorCommand:
-    def test_doctor_runs(self) -> None:
+    def test_doctor_reports_environment(self, clean_env: None) -> None:
         result = runner.invoke(app, ["doctor"])
-        assert result.exit_code == 0
         assert "NoScope Doctor" in result.output
         assert "Python" in result.output
+        assert "3.1" in result.output
 
-    def test_doctor_checks_python_version(self) -> None:
+    def test_doctor_fails_without_a_key(self, clean_env: None) -> None:
+        # doctor is meant to be usable as a gate in scripts and CI, so a missing
+        # requirement has to show up in the exit code, not just the text.
         result = runner.invoke(app, ["doctor"])
-        assert "3.1" in result.output  # Should show Python version
+        assert result.exit_code == 1
+        assert "At least one API key" in result.output
+
+    def test_doctor_passes_with_one_key(
+        self, clean_env: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Either provider alone is enough — the unset one must not fail the run.
+        monkeypatch.setenv("NOSCOPE_ANTHROPIC_API_KEY", "test-key")
+        result = runner.invoke(app, ["doctor"])
+        assert result.exit_code == 0, result.output
+        assert "All checks passed" in result.output
 
 
 class TestInitCommand:

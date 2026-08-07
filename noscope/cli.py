@@ -40,8 +40,16 @@ def run(
     token_budget: int = typer.Option(
         None, "--token-budget", help="Stop the build once this many total tokens are used"
     ),
+    workers: int = typer.Option(None, "--workers", help="Parallel build workers (default 2)"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Exercise the whole pipeline with no API calls and no tokens spent",
+    ),
 ) -> None:
     """Build an MVP from a spec within a timebox."""
+    import os
+
     from noscope.config.settings import load_settings
     from noscope.ui.console import ConsoleUI
 
@@ -50,12 +58,21 @@ def run(
     if danger:
         ui.danger_warning()
 
+    if dry_run:
+        # No provider is contacted, so settings needn't carry a real key.
+        os.environ.setdefault("NOSCOPE_ANTHROPIC_API_KEY", "dry-run")
+        console.print(
+            "  [cyan]Dry run[/cyan] — no API calls, no tokens. "
+            "Exercises the full pipeline end to end.\n"
+        )
+
     try:
         settings = load_settings(
             default_provider=provider,
             default_model=model,
             danger_mode=danger,
             token_budget=token_budget,
+            max_workers=workers,
         )
     except ValueError as e:
         console.print(f"[red]Configuration error:[/red] {e}")
@@ -65,7 +82,7 @@ def run(
 
     from noscope.orchestrator import Orchestrator
 
-    orchestrator = Orchestrator(settings, console=console)
+    orchestrator = Orchestrator(settings, console=console, dry_run=dry_run)
     asyncio.run(
         orchestrator.run(
             spec_path=spec,
@@ -79,16 +96,25 @@ def run(
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    live: bool = typer.Option(
+        False,
+        "--live",
+        help="Also make one tiny API call to prove the key and model actually work",
+    ),
+) -> None:
     """Check environment for NoScope requirements."""
     console.print(f"[bold]NoScope Doctor[/bold] v{__version__}\n")
 
-    checks = []
+    # (name, ok, detail, required). Only `required` checks decide the exit code;
+    # the rest are reported for context. Deriving that from the name — the old
+    # `"optional" not in name` — made every informational row a hard failure.
+    checks: list[tuple[str, bool, str, bool]] = []
 
     # Python version
     v = sys.version_info
     ok = v >= (3, 12)
-    checks.append(("Python ≥ 3.12", ok, f"{v.major}.{v.minor}.{v.micro}"))
+    checks.append(("Python ≥ 3.12", ok, f"{v.major}.{v.minor}.{v.micro}", True))
 
     # API keys — check env vars and .env file
     import os
@@ -100,33 +126,94 @@ def doctor() -> None:
         os.environ.get("NOSCOPE_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     )
     has_openai = bool(os.environ.get("NOSCOPE_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY"))
-    checks.append(("Anthropic API key", has_anthropic, "set" if has_anthropic else "not set"))
-    checks.append(("OpenAI API key", has_openai, "set" if has_openai else "not set"))
-    checks.append(("At least one API key", has_anthropic or has_openai, ""))
+    # Either key alone is enough, so the per-provider rows are informational.
+    checks.append(
+        ("Anthropic API key", has_anthropic, "set" if has_anthropic else "not set", False)
+    )
+    checks.append(("OpenAI API key", has_openai, "set" if has_openai else "not set", False))
+    checks.append(("At least one API key", has_anthropic or has_openai, "", True))
 
     # Git
     git_ok = shutil.which("git") is not None
-    checks.append(("git", git_ok, shutil.which("git") or "not found"))
+    checks.append(("git", git_ok, shutil.which("git") or "not found", True))
 
-    # Docker
-    docker_ok = shutil.which("docker") is not None
-    checks.append(("docker (optional)", docker_ok, shutil.which("docker") or "not found"))
+    # Docker — the binary existing says nothing about --sandbox working, so
+    # check the daemon too. This is the exact check `run --sandbox` performs.
+    from noscope.tools.docker import preflight_docker
+
+    docker_problem = asyncio.run(preflight_docker(timeout=5.0))
+    docker_ok = docker_problem is None
+    checks.append(
+        (
+            "docker (optional, for --sandbox)",
+            docker_ok,
+            "daemon reachable" if docker_ok else "unusable — see below",
+            False,
+        )
+    )
 
     # uv
     uv_ok = shutil.which("uv") is not None
-    checks.append(("uv (optional)", uv_ok, shutil.which("uv") or "not found"))
+    checks.append(("uv (optional)", uv_ok, shutil.which("uv") or "not found", False))
 
-    for name, ok, detail in checks:
-        icon = "[green]✓[/green]" if ok else "[red]✗[/red]"
+    for name, ok, detail, required in checks:
+        icon = "[green]✓[/green]" if ok else ("[red]✗[/red]" if required else "[yellow]–[/yellow]")
         detail_str = f" ({detail})" if detail else ""
         console.print(f"  {icon} {name}{detail_str}")
 
-    all_ok = all(ok for name, ok, _ in checks if "optional" not in name)
+    if docker_problem:
+        # Optional, so it doesn't fail the run — but say what's actually wrong.
+        console.print(f"\n  [dim]{docker_problem}[/dim]")
+
+    all_ok = all(ok for _, ok, _, required in checks if required)
+
+    if live:
+        all_ok = _live_check() and all_ok
+
     console.print()
     if all_ok:
         console.print("[green]All checks passed![/green]")
-    else:
-        console.print("[yellow]Some checks failed. Fix the issues above.[/yellow]")
+        return
+    console.print("[yellow]Some checks failed. Fix the issues above.[/yellow]")
+    # Exit non-zero so `noscope doctor` is usable as a gate in scripts and CI.
+    raise typer.Exit(1)
+
+
+def _live_check() -> bool:
+    """Make one minimal API call so a bad key or model fails here, not mid-run."""
+    from noscope.config.settings import load_settings
+    from noscope.errors import explain_error
+    from noscope.llm import create_provider, default_model_for, resolve_provider_name
+    from noscope.llm.base import Message
+
+    try:
+        settings = load_settings()
+    except ValueError as e:
+        console.print(f"  [red]✗[/red] live API check ({e})")
+        return False
+
+    provider_name = resolve_provider_name(settings)
+    model = settings.default_model or default_model_for(provider_name)
+
+    async def _ping() -> str:
+        provider = create_provider(settings)
+        response = await provider.complete(
+            [Message(role="user", content="Reply with the single word: ok")]
+        )
+        return response.content.strip()
+
+    try:
+        reply = asyncio.run(_ping())
+    except Exception as e:  # noqa: BLE001 — surfaced to the user below
+        console.print(f"  [red]✗[/red] live API check ({provider_name}/{model})")
+        hint = explain_error(e, provider=provider_name, model=model)
+        console.print(f"      {hint or f'{type(e).__name__}: {e}'}")
+        return False
+
+    console.print(
+        f"  [green]✓[/green] live API check ({provider_name}/{model}) — replied {reply[:20]!r}"
+    )
+    return True
 
 
 @app.command()
@@ -144,6 +231,7 @@ def new(
     token_budget: int = typer.Option(
         None, "--token-budget", help="Stop the build once this many total tokens are used"
     ),
+    workers: int = typer.Option(None, "--workers", help="Parallel build workers (default 2)"),
 ) -> None:
     """Create a new project interactively and start building immediately."""
     from rich.panel import Panel
@@ -217,20 +305,22 @@ def new(
         body=f"# {name.strip()}\n\n{body}",
     )
 
-    # Save spec file for reproducibility
-    spec_filename = name.strip().lower().replace(" ", "-") + ".md"
-    spec_content = f"""---
-name: "{spec.name}"
-timebox: "{spec.timebox}"
-constraints:
-{chr(10).join(f'  - "{c}"' for c in constraints) if constraints else "  []"}
-acceptance:
-{chr(10).join(f'  - "{a.raw}"' for a in acceptance) if acceptance else "  []"}
----
+    # Save spec file for reproducibility. Serialize the frontmatter with a real
+    # YAML dumper — hand-built quoting broke on any name or constraint
+    # containing a quote character.
+    from noscope.spec.parser import build_spec_file, slugify
 
-{spec.body}
-"""
-    Path(spec_filename).write_text(spec_content, encoding="utf-8")
+    spec_filename = slugify(spec.name) + ".md"
+    Path(spec_filename).write_text(
+        build_spec_file(
+            name=spec.name,
+            timebox=spec.timebox,
+            constraints=constraints,
+            acceptance=[a.raw for a in acceptance],
+            body=spec.body,
+        ),
+        encoding="utf-8",
+    )
     console.print(f"\n  [dim]Spec saved to {spec_filename}[/dim]")
 
     # Load settings and run
@@ -243,6 +333,7 @@ acceptance:
             default_model=model,
             danger_mode=danger,
             token_budget=token_budget,
+            max_workers=workers,
         )
     except ValueError as e:
         console.print(f"[red]Configuration error:[/red] {e}")

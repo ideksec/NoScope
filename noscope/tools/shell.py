@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import signal
 from collections.abc import Mapping
+from contextlib import suppress
 from typing import Any
 
 from noscope.capabilities import Capability
@@ -38,6 +40,8 @@ _SENSITIVE_ENV_KEY_PATTERN = re.compile(
 )
 
 MAX_OUTPUT_LENGTH = 50_000
+# How long to wait for a killed process tree to actually go away.
+KILL_GRACE_SECONDS = 5.0
 
 
 def build_execution_env(base_env: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -57,6 +61,25 @@ def build_execution_env(base_env: Mapping[str, str] | None = None) -> dict[str, 
         cleaned = [p for p in path_parts if ".venv" not in p]
         env["PATH"] = os.pathsep.join(cleaned)
     return env
+
+
+async def kill_process_group(proc: asyncio.subprocess.Process) -> None:
+    """Terminate a timed-out command and everything it spawned, then reap it.
+
+    Killing only the shell is not enough. ``sh -c "npm run dev"`` leaves the
+    server running as an orphan, still holding the stdout pipe — so the run
+    never gets its file descriptors back and ``proc.wait()`` blocks until the
+    orphan happens to exit. Because the child was started in its own session,
+    one ``killpg`` takes down the whole tree.
+    """
+    with suppress(ProcessLookupError, PermissionError, OSError):
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    with suppress(ProcessLookupError, OSError):
+        await asyncio.wait_for(proc.wait(), timeout=KILL_GRACE_SECONDS)
+    if proc.returncode is None:  # pragma: no cover — killpg already covers this
+        with suppress(ProcessLookupError, OSError):
+            proc.kill()
+            await proc.wait()
 
 
 class ShellTool(Tool):
@@ -113,10 +136,13 @@ class ShellTool(Tool):
                 env=build_execution_env(),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                # Own process group, so a timeout can take the whole tree down
+                # (see kill_process_group).
+                start_new_session=True,
             )
             stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except TimeoutError:
-            proc.kill()
+            await kill_process_group(proc)
             return ToolResult.error(f"Command timed out after {timeout}s")
         except OSError as e:
             return ToolResult.error(f"Failed to execute: {e}")

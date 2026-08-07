@@ -28,6 +28,25 @@ class TestShellTool:
         assert result.status == "error"
         assert "timed out" in result.display.lower()
 
+    async def test_timeout_kills_whole_process_tree(self, tool_context: ToolContext) -> None:
+        # A timed-out command must not leave orphans behind. Killing only the
+        # shell leaves grandchildren running, still holding the output pipes —
+        # which also made the timeout path block for the command's full runtime.
+        import time
+
+        started = time.monotonic()
+        result = await ShellTool().execute(
+            # The subshell forces a grandchild: `sh -c` cannot exec-optimize it.
+            {"command": "(sleep 30) & wait", "timeout": 1},
+            tool_context,
+        )
+        elapsed = time.monotonic() - started
+
+        assert result.status == "error"
+        assert "timed out" in result.display.lower()
+        # Generous, but far below the 30s the orphan would have kept us waiting.
+        assert elapsed < 10, f"timeout path blocked on an orphan for {elapsed:.1f}s"
+
     async def test_denied_command(self, tool_context: ToolContext) -> None:
         tool = ShellTool()
         result = await tool.execute({"command": "sudo rm -rf /"}, tool_context)

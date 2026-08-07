@@ -58,6 +58,28 @@ Everything that could run long consults it:
 The deadline is *cooperative* — it doesn't kill threads, it gives every loop a
 cheap check so they wind down and the pipeline advances to HANDOFF.
 
+### The hole cooperative checking leaves
+
+Checks happen *between* iterations, so nothing consults the deadline while a
+request is in flight — and both SDKs default to a 600-second read timeout with
+retries stacked on top. One stalled call could therefore outlast a five-minute
+timebox entirely. That isn't a degraded guarantee; it's no guarantee.
+
+So every provider call is wrapped by
+[`DeadlineBoundProvider`](noscope/llm/bounded.py), which caps it at
+`NOSCOPE_REQUEST_TIMEOUT` (120s) or the remaining timebox, whichever is
+smaller. Two properties make it worth doing this way:
+
+- The `wait_for` sits *outside* the SDK call, so the bound covers the SDK's
+  internal retries too, not just one attempt.
+- It's applied once, in the orchestrator, so every call site — plan, agents,
+  harden, verify, handoff — is covered without any of them knowing about it.
+
+There's one deliberate exception: a floor, because HANDOFF runs *after* the
+deadline by design. The floor applies to the remaining timebox rather than to
+the configured cap, so a deliberately small `NOSCOPE_REQUEST_TIMEOUT` is still
+honored — it guards against an expired deadline, not against a choice.
+
 ## Multi-agent build
 
 BUILD is the most concurrent part. The [`Supervisor`](noscope/supervisor.py)
@@ -96,8 +118,33 @@ Three design decisions worth calling out:
   JSON, missing entry point) are injected into the relevant worker's next turn
   as a correction, rather than accumulating in a log nobody reads.
 
-Concurrency is bounded at `MAX_WORKERS = 2` — a deliberate, conservative choice
-to stay under provider rate limits with several concurrent LLM streams.
+Concurrency defaults to 2 workers — a deliberate, conservative choice to stay
+under provider rate limits with several concurrent LLM streams — and is
+configurable with `--workers`.
+
+The audit agent isn't just an existence check: it compile-checks Python (and
+parses JavaScript where `node` is available), so a file that cannot even parse
+is surfaced to the worker that wrote it while there's still time to fix it.
+
+### Write conflicts
+
+Partitioning reduces overlap; it can't eliminate it, because the file
+assignment ultimately comes from a model. So writes are also tracked at
+runtime. A [`WriteLedger`](noscope/conflicts.py) records the last writer of
+each path; when a *different* agent overwrites it with *different* content,
+three things happen:
+
+1. The clobbering agent gets a warning appended to its tool output — the only
+   channel back into its conversation — telling it to re-read before editing.
+2. A `write.conflict` event is logged.
+3. The handoff report gets a "Parallel Write Conflicts" section, appended
+   after generation so the model writing the report cannot omit it.
+
+Writes are warned about, not blocked. Overlap is sometimes legitimate — a
+worker adding a dependency to a manifest the setup agent created — and a
+harness that refuses writes mid-build would fail more runs than it saves. The
+failure being defended against is the silent one: two workers both "succeed",
+last write wins, and the run reports a clean build over discarded work.
 
 ## Tools and capability gating
 
@@ -170,6 +217,25 @@ sequenceDiagram
 The verdict is grounded in an executed command every time. A model that asserts
 success without a passing command simply doesn't get a "verified" run.
 
+## Context management
+
+Agent loops append every turn to a message list and can run for hundreds of
+iterations, with whole-file reads and large command outputs landing in context.
+Unbounded, that eventually fails on context length — and a failed request costs
+that worker its remaining tasks. [`context.py`](noscope/context.py) applies two
+cheap defenses before each request:
+
+- **`truncate_tool_output`** caps any single tool result, keeping the head and
+  tail (errors live at one end or the other) with a note of what was dropped.
+- **`trim_history`** drops the oldest turns once the conversation exceeds a
+  character budget, always keeping the system prompt and the original briefing,
+  and leaving a note telling the agent to re-read files rather than trust
+  memory of dropped output.
+
+The subtle invariant: a tool result whose assistant turn was dropped is an *API
+error*, not merely lost context. So the kept tail may never begin with a `tool`
+message — enforced in code and swept across many conversation lengths in tests.
+
 ## Two budgets: time and tokens
 
 NoScope's promise is a *spend cap*. It enforces that in both dimensions:
@@ -222,7 +288,8 @@ rather than aspirational.
 | **Own agent harness, not a wrapper over the Claude Agent SDK** | The orchestration *is* the project. Wrapping the SDK (Claude Code as a library) would make it "Claude Code with a timer" and give up provider-agnosticism. See [`PLAN.md`](PLAN.md) §3 for the full trade-off. |
 | **Execute checks, don't trust the model** | Model-as-oracle verification is the worst failure mode for a demo. HARDEN and VERIFY both ground their verdicts in commands the harness runs. |
 | **`edit_file` with a uniqueness guard, not whole-file rewrites** | Whole-file writes were the dominant token cost and caused last-write-wins clobbering; an edit that would match ambiguously *fails* rather than changing the wrong region. |
-| **Cooperative deadline, not forced cancellation** | Cheap per-loop checks wind agents down cleanly so the pipeline always reaches HANDOFF, instead of killing work mid-write. |
+| **Cooperative deadline, not forced cancellation** | Cheap per-loop checks wind agents down cleanly so the pipeline always reaches HANDOFF, instead of killing work mid-write. The one thing cooperation can't cover — a request already in flight — is bounded at the provider boundary instead. |
+| **Agents tolerate a few failed LLM calls, then stand down** | Tasks are partitioned into per-worker streams, so an exception escaping one agent used to silently cost that worker every remaining task. Three consecutive failures is enough to distinguish a blip from an outage without burning the timebox retrying. |
 | **Capability gating + dedicated tools over raw bash** | Typed, gated tools can be path-checked, approved, logged, and redacted; an opaque bash string can't. |
 | **Thin, single-file LLM layer** | Owning the harness means owning API churn; keeping the provider layer tiny makes a model/API change a one-line default, not a refactor. |
 
@@ -230,13 +297,14 @@ rather than aspirational.
 
 Honest boundaries (tracked in [`PLAN.md`](PLAN.md) and [`RELEASE.md`](RELEASE.md)):
 
-- No conversation-context management yet — very long runs can approach context
-  limits.
-- The Docker sandbox uses a Python-only image; git tools still act on the host
-  tree during `--sandbox` runs, and the container exec timeout is not
-  deadline-aware.
-- `MAX_WORKERS` is fixed at 2.
+- The Docker sandbox uses a Python-only image and git tools still act on the
+  host tree during `--sandbox` runs.
+- Worker count defaults to 2 (raise with `--workers`), tuned conservatively
+  for provider rate limits.
 - The shell safety filter is a deny-list — a backstop, not a sandbox. Untrusted
   specs should use `--sandbox`.
-- Live end-to-end behavior is validated by hand (see `RELEASE.md`), not in CI —
-  CI has no API key.
+- Live end-to-end behavior against a real model is validated by hand (see
+  `RELEASE.md`), since CI has no API key. CI does run the full pipeline on
+  every push via `--dry-run`, so the harness itself — CLI, capability gating,
+  tool dispatch, phase budgets, acceptance checks, reporting — is covered; what
+  isn't covered is model quality and the live provider wire format.

@@ -89,6 +89,27 @@ export NOSCOPE_OPENAI_API_KEY="your-key-here"
 uv run noscope doctor
 ```
 
+### Try it with no API calls first
+
+```bash
+uv run noscope run --spec examples/static-portfolio.md --time 3m --dir /tmp/demo --yes --dry-run
+```
+
+`--dry-run` exercises the entire pipeline — workspace setup, capability
+gating, tool execution, acceptance checks, verification, and the handoff
+report — without contacting any provider or spending a token. If a dry run
+completes, the harness works; anything that fails on a live run is about the
+model or the API, not the plumbing.
+
+### Confirm your key and model work
+
+```bash
+uv run noscope doctor --live
+```
+
+`--live` makes one tiny API call, so a bad key or a wrong `--model` fails in
+seconds instead of part-way through a real build.
+
 ### Run your first build
 
 ```bash
@@ -145,6 +166,15 @@ output" guarantee is enforced. A few decisions worth a closer look
   pipeline still reaches HANDOFF; an optional `--token-budget` caps spend in
   tokens the same way. The product's promise is a spend guarantee — enforced in
   both dimensions.
+
+  Cooperative checks happen *between* iterations, so they can't interrupt a
+  request already in flight — and both SDKs default to a 600-second read
+  timeout, with retries on top. Every provider call is therefore wrapped by a
+  `DeadlineBoundProvider` that caps it at `NOSCOPE_REQUEST_TIMEOUT` (120s) or
+  the remaining timebox, whichever is smaller. That's what makes the deadline a
+  guarantee rather than a best effort. The one deliberate exception is a floor
+  so HANDOFF — which runs *after* the deadline by design — can still write its
+  report.
 
 - **Parallel build with dependency-aware partitioning.** A supervisor splits
   setup into concurrent structure + deps agents, then partitions the remaining
@@ -215,9 +245,11 @@ See the [`examples/`](examples/) directory for more spec templates.
 uv run noscope run --spec <path> --time <duration> --dir <output>
     [--provider anthropic|openai] [--model <model>]
     [--sandbox] [--danger] [--yes] [--serve]
+    [--token-budget <n>] [--workers <n>]
 
 uv run noscope new             # Create and run a project interactively
 uv run noscope doctor          # Check environment and API keys
+uv run noscope doctor --live   # ...and prove the key/model work with one API call
 uv run noscope init            # Create a spec file template
 ```
 
@@ -232,6 +264,9 @@ uv run noscope init            # Create a spec file template
 | `--danger` | Bypass safety filters (use only with trusted specs) |
 | `--yes`, `-y` | Auto-approve all capability requests |
 | `--serve` | After a verified build, launch the app and stream output (blocks until Ctrl+C) |
+| `--token-budget` | Stop the build once this many total tokens are used (a spend cap alongside the timebox) |
+| `--workers` | Parallel build workers (default 2) |
+| `--dry-run` | Run the full pipeline with no API calls and no tokens spent |
 
 ---
 
@@ -274,6 +309,19 @@ NoScope executes LLM-generated code on your machine. It ships with multiple laye
 - **Path traversal protection** — agents cannot write outside the workspace
 - **Docker sandbox** — optional container isolation with resource limits
 - **Secret redaction** — API keys are scrubbed from event logs
+
+### About `--sandbox`
+
+`--sandbox` runs every agent action inside a container with **no host mounts** —
+files are copied in at start and back out at stop — under a memory/CPU cap, with
+all Linux capabilities dropped except the handful a build needs, and
+`no-new-privileges` set. It needs a reachable Docker daemon; `noscope doctor`
+tells you whether you have one, and `run --sandbox` checks before spending a
+single token rather than failing mid-build.
+
+Without `--sandbox`, commands run on the host. They are still capability-gated
+and safety-filtered, but a deny-list is not a security boundary — use
+`--sandbox` for specs you did not write yourself.
 
 See [SECURITY.md](.github/SECURITY.md) for the full security model, known limitations, and how to report vulnerabilities.
 

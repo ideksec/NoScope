@@ -1,12 +1,42 @@
-"""Markdown + YAML frontmatter spec parser."""
+"""Markdown + YAML frontmatter spec parsing and generation."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import frontmatter
+import yaml
 
 from noscope.spec.models import AcceptanceCheck, SpecInput
+
+
+def slugify(name: str) -> str:
+    """Turn a project name into a safe single-segment filename stem."""
+    slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
+    return slug or "spec"
+
+
+def build_spec_file(
+    name: str,
+    timebox: str,
+    constraints: list[str],
+    acceptance: list[str],
+    body: str,
+) -> str:
+    """Render a spec file with correctly escaped YAML frontmatter.
+
+    Uses a real YAML dumper so names or constraints containing quotes,
+    colons, or newlines produce a valid file.
+    """
+    meta = {
+        "name": name,
+        "timebox": timebox,
+        "constraints": constraints,
+        "acceptance": acceptance,
+    }
+    front = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True, default_flow_style=False)
+    return f"---\n{front}---\n\n{body}\n"
 
 
 def parse_spec(path: Path) -> SpecInput:

@@ -21,6 +21,10 @@ if TYPE_CHECKING:
     from noscope.ui.console import ConsoleUI
 
 MAX_AGENT_ITERATIONS = 200
+# Consecutive failed LLM calls before an agent stands down. A transient blip
+# shouldn't cost a worker every remaining task in its stream, but a persistent
+# failure shouldn't burn the timebox retrying either.
+MAX_CONSECUTIVE_LLM_FAILURES = 3
 TIME_STATUS_INTERVAL = 3  # Inject time status every N tool calls
 
 
@@ -138,6 +142,7 @@ class BuildAgent:
             )
         )
 
+        consecutive_failures = 0
         for _iteration in range(MAX_AGENT_ITERATIONS):
             if self.deadline.is_expired() or self.deadline.should_transition(Phase.BUILD):
                 break
@@ -171,7 +176,30 @@ class BuildAgent:
             # fails on length would cost this worker its remaining tasks.
             messages = trim_history(messages)
 
-            response = await self.provider.complete(messages, tools=tool_schemas)
+            try:
+                response = await self.provider.complete(messages, tools=tool_schemas)
+            except Exception as e:  # noqa: BLE001 — logged and bounded below
+                # A blip on one call must not cost this worker every remaining
+                # task in its stream. Retry a couple of times, then stand down
+                # and let the other workers and HANDOFF carry on.
+                # (CancelledError is a BaseException, so it still propagates.)
+                consecutive_failures += 1
+                self.event_log.emit(
+                    phase=Phase.BUILD.value,
+                    event_type="agent.llm_error",
+                    summary=f"[{self.agent_id}] LLM call failed "
+                    f"({consecutive_failures}/{MAX_CONSECUTIVE_LLM_FAILURES}): {e}",
+                    data={
+                        "agent_id": self.agent_id,
+                        "error": str(e),
+                        "type": type(e).__name__,
+                    },
+                )
+                if consecutive_failures >= MAX_CONSECUTIVE_LLM_FAILURES:
+                    break
+                continue
+
+            consecutive_failures = 0
             if self.tokens:
                 self.tokens.add(response.usage)
 

@@ -248,3 +248,65 @@ class TestSupervisorRun:
 
         assert context.deadline.total_seconds >= 60, "fixture must have a long deadline to matter"
         assert elapsed < 10, f"supervisor blocked on the audit agent for {elapsed:.1f}s"
+
+
+class _FlakyProvider(_WorkerProvider):
+    """Fails the first `fail_first` calls, then behaves normally."""
+
+    def __init__(self, fail_first: int) -> None:
+        super().__init__()
+        self._remaining_failures = fail_first
+
+    async def complete(self, messages: list[Message], **kwargs: Any) -> LLMResponse:
+        if self._remaining_failures > 0:
+            self._remaining_failures -= 1
+            raise RuntimeError("transient upstream error")
+        return await super().complete(messages, **kwargs)
+
+
+class _AlwaysFailingProvider(_WorkerProvider):
+    async def complete(self, messages: list[Message], **kwargs: Any) -> LLMResponse:
+        self.calls += 1
+        raise RuntimeError("upstream is down")
+
+
+@pytest.mark.asyncio
+class TestAgentResilience:
+    def _supervisor(self, provider: Any, context: ToolContext, event_log: EventLog) -> Supervisor:
+        return Supervisor(
+            provider=provider,
+            dispatcher=_dispatcher(),
+            context=context,
+            event_log=event_log,
+            deadline=context.deadline,
+            max_workers=2,
+        )
+
+    async def test_a_transient_failure_does_not_cost_the_stream(
+        self, tool_context: ToolContext, event_log: EventLog, tmp_workspace: Path
+    ) -> None:
+        # One blip used to propagate out of the worker and take every
+        # remaining task in its stream with it.
+        context = replace(tool_context, workspace=tmp_workspace, write_ledger=WriteLedger())
+        supervisor = self._supervisor(_FlakyProvider(fail_first=2), context, event_log)
+
+        tasks = await supervisor.run(_plan(), tmp_workspace)
+        assert all(t.completed for t in tasks)
+
+    async def test_persistent_failure_stands_down_instead_of_spinning(
+        self, tool_context: ToolContext, event_log: EventLog, tmp_workspace: Path
+    ) -> None:
+        # A provider that is simply down must not burn 200 iterations per
+        # worker; each agent gives up after MAX_CONSECUTIVE_LLM_FAILURES.
+        from noscope.agents import MAX_CONSECUTIVE_LLM_FAILURES
+
+        context = replace(tool_context, workspace=tmp_workspace, write_ledger=WriteLedger())
+        provider = _AlwaysFailingProvider()
+        supervisor = self._supervisor(provider, context, event_log)
+
+        tasks = await supervisor.run(_plan(), tmp_workspace)
+
+        # Setup (2 agents) + workers (2 streams), each capped at the retry limit.
+        assert provider.calls <= 4 * MAX_CONSECUTIVE_LLM_FAILURES
+        # The run still returns its tasks rather than raising.
+        assert len(tasks) == 5

@@ -106,12 +106,15 @@ def doctor(
     """Check environment for NoScope requirements."""
     console.print(f"[bold]NoScope Doctor[/bold] v{__version__}\n")
 
-    checks = []
+    # (name, ok, detail, required). Only `required` checks decide the exit code;
+    # the rest are reported for context. Deriving that from the name — the old
+    # `"optional" not in name` — made every informational row a hard failure.
+    checks: list[tuple[str, bool, str, bool]] = []
 
     # Python version
     v = sys.version_info
     ok = v >= (3, 12)
-    checks.append(("Python ≥ 3.12", ok, f"{v.major}.{v.minor}.{v.micro}"))
+    checks.append(("Python ≥ 3.12", ok, f"{v.major}.{v.minor}.{v.micro}", True))
 
     # API keys — check env vars and .env file
     import os
@@ -123,13 +126,16 @@ def doctor(
         os.environ.get("NOSCOPE_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     )
     has_openai = bool(os.environ.get("NOSCOPE_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY"))
-    checks.append(("Anthropic API key", has_anthropic, "set" if has_anthropic else "not set"))
-    checks.append(("OpenAI API key", has_openai, "set" if has_openai else "not set"))
-    checks.append(("At least one API key", has_anthropic or has_openai, ""))
+    # Either key alone is enough, so the per-provider rows are informational.
+    checks.append(
+        ("Anthropic API key", has_anthropic, "set" if has_anthropic else "not set", False)
+    )
+    checks.append(("OpenAI API key", has_openai, "set" if has_openai else "not set", False))
+    checks.append(("At least one API key", has_anthropic or has_openai, "", True))
 
     # Git
     git_ok = shutil.which("git") is not None
-    checks.append(("git", git_ok, shutil.which("git") or "not found"))
+    checks.append(("git", git_ok, shutil.which("git") or "not found", True))
 
     # Docker — the binary existing says nothing about --sandbox working, so
     # check the daemon too. This is the exact check `run --sandbox` performs.
@@ -142,15 +148,16 @@ def doctor(
             "docker (optional, for --sandbox)",
             docker_ok,
             "daemon reachable" if docker_ok else "unusable — see below",
+            False,
         )
     )
 
     # uv
     uv_ok = shutil.which("uv") is not None
-    checks.append(("uv (optional)", uv_ok, shutil.which("uv") or "not found"))
+    checks.append(("uv (optional)", uv_ok, shutil.which("uv") or "not found", False))
 
-    for name, ok, detail in checks:
-        icon = "[green]✓[/green]" if ok else "[red]✗[/red]"
+    for name, ok, detail, required in checks:
+        icon = "[green]✓[/green]" if ok else ("[red]✗[/red]" if required else "[yellow]–[/yellow]")
         detail_str = f" ({detail})" if detail else ""
         console.print(f"  {icon} {name}{detail_str}")
 
@@ -158,7 +165,7 @@ def doctor(
         # Optional, so it doesn't fail the run — but say what's actually wrong.
         console.print(f"\n  [dim]{docker_problem}[/dim]")
 
-    all_ok = all(ok for name, ok, _ in checks if "optional" not in name)
+    all_ok = all(ok for _, ok, _, required in checks if required)
 
     if live:
         all_ok = _live_check() and all_ok
@@ -166,8 +173,10 @@ def doctor(
     console.print()
     if all_ok:
         console.print("[green]All checks passed![/green]")
-    else:
-        console.print("[yellow]Some checks failed. Fix the issues above.[/yellow]")
+        return
+    console.print("[yellow]Some checks failed. Fix the issues above.[/yellow]")
+    # Exit non-zero so `noscope doctor` is usable as a gate in scripts and CI.
+    raise typer.Exit(1)
 
 
 def _live_check() -> bool:

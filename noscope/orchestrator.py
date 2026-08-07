@@ -11,6 +11,7 @@ from rich.console import Console
 from noscope.capabilities import CapabilityStore
 from noscope.config.settings import NoscopeSettings
 from noscope.deadline import Deadline, Phase
+from noscope.errors import format_run_error
 from noscope.llm import create_provider, default_model_for, resolve_provider_name
 from noscope.logging.events import EventLog, RunDir
 from noscope.phases import (
@@ -58,16 +59,29 @@ from noscope.ui.console import ConsoleUI
 class Orchestrator:
     """Orchestrates the full NoScope run lifecycle."""
 
-    def __init__(self, settings: NoscopeSettings, console: Console | None = None) -> None:
+    def __init__(
+        self,
+        settings: NoscopeSettings,
+        console: Console | None = None,
+        dry_run: bool = False,
+    ) -> None:
         self.settings = settings
-        self.provider = create_provider(settings)
+        self.dry_run = dry_run
+        if dry_run:
+            from noscope.llm.dryrun import DryRunProvider
+
+            self.provider: Any = DryRunProvider()
+        else:
+            self.provider = create_provider(settings)
         self.ui = ConsoleUI(console)
         self._provider_name = resolve_provider_name(settings)
         self._model = settings.default_model or default_model_for(self._provider_name)
         # fast_model is an Anthropic model id; only apply it on the Anthropic
         # provider, and never override an explicit --model.
         self._report_model = (
-            settings.fast_model
+            None
+            if dry_run
+            else settings.fast_model
             if self._provider_name == "anthropic" and settings.default_model is None
             else None
         )
@@ -318,7 +332,12 @@ class Orchestrator:
                 summary=f"Run error: {e}",
                 data={"error": str(e), "type": type(e).__name__},
             )
-            self.ui.console.print(f"\n[red]Error:[/red] {e}")
+            # Explain the failure in terms the user can act on (bad key, wrong
+            # model, rate limit, ...) instead of leaving a bare exception.
+            self.ui.console.print(
+                f"\n[red]Run failed:[/red] "
+                f"{format_run_error(e, provider=self._provider_name, model=self._model)}"
+            )
             if not tasks and plan_output is not None:
                 tasks = plan_output.tasks
 

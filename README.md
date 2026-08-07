@@ -89,6 +89,27 @@ export NOSCOPE_OPENAI_API_KEY="your-key-here"
 uv run noscope doctor
 ```
 
+### Try it with no API calls first
+
+```bash
+uv run noscope run --spec examples/static-portfolio.md --time 3m --dir /tmp/demo --yes --dry-run
+```
+
+`--dry-run` exercises the entire pipeline — workspace setup, capability
+gating, tool execution, acceptance checks, verification, and the handoff
+report — without contacting any provider or spending a token. If a dry run
+completes, the harness works; anything that fails on a live run is about the
+model or the API, not the plumbing.
+
+### Confirm your key and model work
+
+```bash
+uv run noscope doctor --live
+```
+
+`--live` makes one tiny API call, so a bad key or a wrong `--model` fails in
+seconds instead of part-way through a real build.
+
 ### Run your first build
 
 ```bash
@@ -219,6 +240,7 @@ uv run noscope run --spec <path> --time <duration> --dir <output>
 
 uv run noscope new             # Create and run a project interactively
 uv run noscope doctor          # Check environment and API keys
+uv run noscope doctor --live   # ...and prove the key/model work with one API call
 uv run noscope init            # Create a spec file template
 ```
 
@@ -235,6 +257,7 @@ uv run noscope init            # Create a spec file template
 | `--serve` | After a verified build, launch the app and stream output (blocks until Ctrl+C) |
 | `--token-budget` | Stop the build once this many total tokens are used (a spend cap alongside the timebox) |
 | `--workers` | Parallel build workers (default 2) |
+| `--dry-run` | Run the full pipeline with no API calls and no tokens spent |
 
 ---
 

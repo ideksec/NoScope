@@ -33,6 +33,14 @@ review and roadmap.
 
 ### Added
 
+- **`--dry-run`:** exercises the entire pipeline — tools, acceptance checks,
+  verification, event log, handoff report — with no API calls and no tokens,
+  so the harness can be smoke-tested before spending anything.
+- **`doctor --live`:** makes one minimal API call so a bad key or wrong model
+  fails in seconds rather than part-way through a build.
+- **Actionable API errors:** auth failures, unknown models, rate limits,
+  overload, and network errors now print a diagnosis and the fix instead of a
+  bare traceback.
 - **Context management:** tool results are capped and the conversation is
   trimmed to a character budget before each request, so long runs no longer
   risk failing on context length (trimming never orphans a tool result).

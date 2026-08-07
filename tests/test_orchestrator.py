@@ -206,3 +206,59 @@ class TestSpecInput:
         )
         assert spec.acceptance[0].is_cmd is True
         assert spec.acceptance[1].is_cmd is False
+
+
+class TestDryRun:
+    def test_dry_run_completes_without_a_provider(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The whole pipeline must run with no API key and no network: this is
+        # the smoke test users run before spending tokens.
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("NOSCOPE_ANTHROPIC_API_KEY", "dry-run")
+
+        from noscope.config.settings import load_settings
+        from noscope.llm.dryrun import DRY_RUN_FILE
+        from noscope.orchestrator import Orchestrator
+
+        orch = Orchestrator(load_settings(), console=Console(file=io.StringIO()), dry_run=True)
+        workspace = tmp_path / "out"
+        run_path = asyncio.run(
+            orch.run(
+                spec_input=SpecInput(name="Dry", timebox="3m"),
+                output_dir=workspace,
+                auto_approve=True,
+            )
+        )
+
+        assert (workspace / DRY_RUN_FILE).exists()
+        assert (run_path / "handoff.md").read_text().strip()
+        events = (run_path / "events.jsonl").read_text()
+        types = {json.loads(line)["type"] for line in events.splitlines() if line.strip()}
+        assert "verify.pass" in types
+        assert "run.complete" in types
+
+    def test_dry_run_spends_no_tokens(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("NOSCOPE_ANTHROPIC_API_KEY", "dry-run")
+
+        from noscope.config.settings import load_settings
+        from noscope.orchestrator import Orchestrator
+
+        orch = Orchestrator(load_settings(), console=Console(file=io.StringIO()), dry_run=True)
+        run_path = asyncio.run(
+            orch.run(
+                spec_input=SpecInput(name="Dry", timebox="3m"),
+                output_dir=tmp_path / "out",
+                auto_approve=True,
+            )
+        )
+        complete = [
+            json.loads(line)
+            for line in (run_path / "events.jsonl").read_text().splitlines()
+            if line.strip() and json.loads(line)["type"] == "run.complete"
+        ][0]
+        assert complete["data"]["input_tokens"] == 0
+        assert complete["data"]["output_tokens"] == 0

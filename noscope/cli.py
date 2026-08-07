@@ -41,8 +41,15 @@ def run(
         None, "--token-budget", help="Stop the build once this many total tokens are used"
     ),
     workers: int = typer.Option(None, "--workers", help="Parallel build workers (default 2)"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Exercise the whole pipeline with no API calls and no tokens spent",
+    ),
 ) -> None:
     """Build an MVP from a spec within a timebox."""
+    import os
+
     from noscope.config.settings import load_settings
     from noscope.ui.console import ConsoleUI
 
@@ -50,6 +57,14 @@ def run(
 
     if danger:
         ui.danger_warning()
+
+    if dry_run:
+        # No provider is contacted, so settings needn't carry a real key.
+        os.environ.setdefault("NOSCOPE_ANTHROPIC_API_KEY", "dry-run")
+        console.print(
+            "  [cyan]Dry run[/cyan] — no API calls, no tokens. "
+            "Exercises the full pipeline end to end.\n"
+        )
 
     try:
         settings = load_settings(
@@ -67,7 +82,7 @@ def run(
 
     from noscope.orchestrator import Orchestrator
 
-    orchestrator = Orchestrator(settings, console=console)
+    orchestrator = Orchestrator(settings, console=console, dry_run=dry_run)
     asyncio.run(
         orchestrator.run(
             spec_path=spec,
@@ -81,7 +96,13 @@ def run(
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    live: bool = typer.Option(
+        False,
+        "--live",
+        help="Also make one tiny API call to prove the key and model actually work",
+    ),
+) -> None:
     """Check environment for NoScope requirements."""
     console.print(f"[bold]NoScope Doctor[/bold] v{__version__}\n")
 
@@ -124,11 +145,52 @@ def doctor() -> None:
         console.print(f"  {icon} {name}{detail_str}")
 
     all_ok = all(ok for name, ok, _ in checks if "optional" not in name)
+
+    if live:
+        all_ok = _live_check() and all_ok
+
     console.print()
     if all_ok:
         console.print("[green]All checks passed![/green]")
     else:
         console.print("[yellow]Some checks failed. Fix the issues above.[/yellow]")
+
+
+def _live_check() -> bool:
+    """Make one minimal API call so a bad key or model fails here, not mid-run."""
+    from noscope.config.settings import load_settings
+    from noscope.errors import explain_error
+    from noscope.llm import create_provider, default_model_for, resolve_provider_name
+    from noscope.llm.base import Message
+
+    try:
+        settings = load_settings()
+    except ValueError as e:
+        console.print(f"  [red]✗[/red] live API check ({e})")
+        return False
+
+    provider_name = resolve_provider_name(settings)
+    model = settings.default_model or default_model_for(provider_name)
+
+    async def _ping() -> str:
+        provider = create_provider(settings)
+        response = await provider.complete(
+            [Message(role="user", content="Reply with the single word: ok")]
+        )
+        return response.content.strip()
+
+    try:
+        reply = asyncio.run(_ping())
+    except Exception as e:  # noqa: BLE001 — surfaced to the user below
+        console.print(f"  [red]✗[/red] live API check ({provider_name}/{model})")
+        hint = explain_error(e, provider=provider_name, model=model)
+        console.print(f"      {hint or f'{type(e).__name__}: {e}'}")
+        return False
+
+    console.print(
+        f"  [green]✓[/green] live API check ({provider_name}/{model}) — replied {reply[:20]!r}"
+    )
+    return True
 
 
 @app.command()

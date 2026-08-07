@@ -170,3 +170,20 @@ class TestSlugify:
         from noscope.spec.parser import slugify
 
         assert slugify("!!!") == "spec"
+
+
+class TestShippedExamples:
+    """Every example in examples/ must parse — they're the first thing anyone runs."""
+
+    def test_all_examples_parse(self) -> None:
+        from noscope.spec.parser import parse_spec
+
+        examples = sorted((Path(__file__).parent.parent / "examples").glob("*.md"))
+        assert examples, "examples/ should not be empty"
+
+        for path in examples:
+            spec = parse_spec(path)
+            assert spec.name.strip(), f"{path.name} has no name"
+            assert spec.timebox_seconds > 0, f"{path.name} has no usable timebox"
+            assert spec.body.strip(), f"{path.name} has an empty body"
+            assert spec.acceptance, f"{path.name} defines no acceptance checks"

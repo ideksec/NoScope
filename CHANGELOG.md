@@ -21,6 +21,15 @@ review and roadmap.
   correct phase on tool events.
 - The planner no longer swallows API errors as "invalid plan".
 - Git subprocesses run with the sanitized environment (API keys were visible).
+- **Timed-out commands no longer leak their process trees.** Killing the shell
+  left grandchildren (a dev server, say) running as orphans still holding the
+  output pipes, so the port stayed bound for the rest of the run and the
+  harness blocked until the orphan happened to exit. Children now run in their
+  own session and a timeout terminates the whole group. Same fix for the
+  `docker exec` client and for Ctrl+C on `--serve`.
+- `noscope doctor` exits non-zero when a requirement is missing, so it works as
+  a gate — and no longer counts "OpenAI key not set" as a failure when a valid
+  Anthropic key is present.
 - App launch is opt-in via `--serve`; by default NoScope prints the run command
   instead of blocking on a foreground server, honoring the hard-deadline promise.
 - Docker sandbox: file writes use base64 (the old heredoc corrupted backslashes
@@ -58,6 +67,15 @@ review and roadmap.
   the same way the timebox does — the spend guarantee is now true in tokens too.
 - **Cache-aware cost reporting:** the summary shows cached-read tokens and the
   dollars prompt caching saved.
+- **Write-conflict detection:** a shared `WriteLedger` records the last writer
+  of every file, so when parallel agents overwrite each other the clobbering
+  agent is warned in-conversation, a `write.conflict` event is logged, and the
+  handoff report names the affected files. Previously two workers could both
+  "succeed" while one's work was silently discarded.
+- **Sandbox preflight:** `--sandbox` verifies Docker is actually usable before
+  PLAN instead of failing part-way through a build, and distinguishes
+  not-installed from daemon-down. `doctor` reports the daemon, not just the
+  binary on `PATH`.
 - Structured outputs, prompt caching, adaptive thinking + effort, and SDK-native
   retries in the LLM layer; a cheaper model (Haiku) for the handoff report.
 - `--serve` and `--workers` flags; `NOSCOPE_FAST_MODEL`, `NOSCOPE_MAX_TOKENS`,
@@ -70,6 +88,10 @@ review and roadmap.
   with version floors.
 - Example specs modernized (`python3`, expected-output checks) and README given
   an honest "When to use NoScope" section.
+- CI now checks formatting and runs a no-key smoke job that drives the real CLI
+  through all six phases, so a broken pipeline fails CI even when every unit
+  test passes. Provider request/response shapes are covered by mocked-SDK tests
+  — previously no SDK call was asserted anywhere.
 
 ### Removed
 

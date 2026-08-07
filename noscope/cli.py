@@ -40,6 +40,7 @@ def run(
     token_budget: int = typer.Option(
         None, "--token-budget", help="Stop the build once this many total tokens are used"
     ),
+    workers: int = typer.Option(None, "--workers", help="Parallel build workers (default 2)"),
 ) -> None:
     """Build an MVP from a spec within a timebox."""
     from noscope.config.settings import load_settings
@@ -56,6 +57,7 @@ def run(
             default_model=model,
             danger_mode=danger,
             token_budget=token_budget,
+            max_workers=workers,
         )
     except ValueError as e:
         console.print(f"[red]Configuration error:[/red] {e}")
@@ -144,6 +146,7 @@ def new(
     token_budget: int = typer.Option(
         None, "--token-budget", help="Stop the build once this many total tokens are used"
     ),
+    workers: int = typer.Option(None, "--workers", help="Parallel build workers (default 2)"),
 ) -> None:
     """Create a new project interactively and start building immediately."""
     from rich.panel import Panel
@@ -217,20 +220,22 @@ def new(
         body=f"# {name.strip()}\n\n{body}",
     )
 
-    # Save spec file for reproducibility
-    spec_filename = name.strip().lower().replace(" ", "-") + ".md"
-    spec_content = f"""---
-name: "{spec.name}"
-timebox: "{spec.timebox}"
-constraints:
-{chr(10).join(f'  - "{c}"' for c in constraints) if constraints else "  []"}
-acceptance:
-{chr(10).join(f'  - "{a.raw}"' for a in acceptance) if acceptance else "  []"}
----
+    # Save spec file for reproducibility. Serialize the frontmatter with a real
+    # YAML dumper — hand-built quoting broke on any name or constraint
+    # containing a quote character.
+    from noscope.spec.parser import build_spec_file, slugify
 
-{spec.body}
-"""
-    Path(spec_filename).write_text(spec_content, encoding="utf-8")
+    spec_filename = slugify(spec.name) + ".md"
+    Path(spec_filename).write_text(
+        build_spec_file(
+            name=spec.name,
+            timebox=spec.timebox,
+            constraints=constraints,
+            acceptance=[a.raw for a in acceptance],
+            body=spec.body,
+        ),
+        encoding="utf-8",
+    )
     console.print(f"\n  [dim]Spec saved to {spec_filename}[/dim]")
 
     # Load settings and run
@@ -243,6 +248,7 @@ acceptance:
             default_model=model,
             danger_mode=danger,
             token_budget=token_budget,
+            max_workers=workers,
         )
     except ValueError as e:
         console.print(f"[red]Configuration error:[/red] {e}")

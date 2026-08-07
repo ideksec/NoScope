@@ -268,6 +268,7 @@ class Orchestrator:
                 deadline=deadline,
                 ui=self.ui,
                 tokens=tokens,
+                max_workers=self.settings.max_workers,
             )
             tasks = await supervisor.run(plan_output, workspace)
             completed = sum(1 for t in tasks if t.completed)

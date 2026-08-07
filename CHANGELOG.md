@@ -25,10 +25,20 @@ review and roadmap.
   instead of blocking on a foreground server, honoring the hard-deadline promise.
 - Docker sandbox: file writes use base64 (the old heredoc corrupted backslashes
   and could truncate on content); all container paths are validated against
-  traversal and shell-injection.
+  traversal and shell-injection; container command timeouts are now
+  deadline-aware like the host shell tool.
+- `noscope new` writes its spec with a real YAML dumper — a project name or
+  constraint containing a quote or colon previously produced an invalid file —
+  and slugifies the filename safely.
 
 ### Added
 
+- **Context management:** tool results are capped and the conversation is
+  trimmed to a character budget before each request, so long runs no longer
+  risk failing on context length (trimming never orphans a tool result).
+- **Real audit checks:** the audit agent compile-checks Python (and parses
+  JavaScript when `node` is available), so broken code is caught during BUILD
+  and fed back to workers instead of only existing files being counted.
 - **Editing and discovery tools:** `edit_file` (exact-string replacement with a
   uniqueness guard + diff, replacing whole-file rewrites), `search_files`
   (regex/grep), `find_files` (glob), and `read_file` line windows.
@@ -42,8 +52,8 @@ review and roadmap.
   dollars prompt caching saved.
 - Structured outputs, prompt caching, adaptive thinking + effort, and SDK-native
   retries in the LLM layer; a cheaper model (Haiku) for the handoff report.
-- `--serve` flag; `NOSCOPE_FAST_MODEL`, `NOSCOPE_MAX_TOKENS`, `NOSCOPE_EFFORT`,
-  `NOSCOPE_TOKEN_BUDGET` settings.
+- `--serve` and `--workers` flags; `NOSCOPE_FAST_MODEL`, `NOSCOPE_MAX_TOKENS`,
+  `NOSCOPE_EFFORT`, `NOSCOPE_TOKEN_BUDGET`, `NOSCOPE_MAX_WORKERS` settings.
 
 ### Changed
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from noscope.context import trim_history, truncate_tool_output
@@ -405,7 +406,55 @@ class AuditAgent:
                     {"type": "invalid_requirements", "message": "requirements.txt unreadable"}
                 )
 
+        findings.extend(await self._syntax_findings(workspace))
+
         if self.ui and not findings:
             self.ui.tool_activity("audit", "checks passed", self.deadline)
+
+        return findings
+
+    async def _syntax_findings(self, workspace: Path) -> list[dict[str, Any]]:
+        """Compile-check source files so broken code is caught during BUILD.
+
+        Existence checks alone let a worker keep building on a file that cannot
+        even parse; a syntax error surfaced now is fed back through the audit
+        feed while there is still time to fix it.
+        """
+        findings: list[dict[str, Any]] = []
+
+        if any(workspace.rglob("*.py")):
+            # compileall is quiet on success and names the offending file on failure.
+            result = await self.dispatcher.dispatch(
+                "exec_command",
+                {"command": "python3 -m compileall -q .", "timeout": 20},
+                self.context,
+            )
+            if result.status == "error":
+                findings.append(
+                    {
+                        "type": "syntax_error",
+                        "message": f"Python file(s) fail to compile: {result.display[:300]}",
+                    }
+                )
+
+        js_files = [p for p in workspace.rglob("*.js") if "node_modules" not in p.parts]
+        if js_files:
+            rel = " ".join(f"'{p.relative_to(workspace)}'" for p in js_files[:20])
+            result = await self.dispatcher.dispatch(
+                "exec_command",
+                # Skip silently when node isn't available rather than crying wolf.
+                {
+                    "command": f"command -v node >/dev/null || exit 0; node --check {rel}",
+                    "timeout": 20,
+                },
+                self.context,
+            )
+            if result.status == "error":
+                findings.append(
+                    {
+                        "type": "syntax_error",
+                        "message": f"JavaScript file(s) fail to parse: {result.display[:300]}",
+                    }
+                )
 
         return findings

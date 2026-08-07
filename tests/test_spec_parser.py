@@ -111,3 +111,62 @@ Body here.
         assert result.repo_mode == "existing"
         assert result.risk_policy == "strict"
         assert result.body.strip() == "Body here."
+
+
+class TestSpecFileGeneration:
+    def test_round_trips_through_the_parser(self, tmp_path: Path) -> None:
+        from noscope.spec.parser import build_spec_file
+
+        content = build_spec_file(
+            name="My Project",
+            timebox="10m",
+            constraints=["Use Python"],
+            acceptance=["cmd: pytest -q"],
+            body="# My Project\n\nDo the thing.",
+        )
+        path = tmp_path / "s.md"
+        path.write_text(content, encoding="utf-8")
+        spec = parse_spec(path)
+        assert spec.name == "My Project"
+        assert spec.timebox == "10m"
+        assert spec.constraints == ["Use Python"]
+        assert spec.acceptance[0].command == "pytest -q"
+
+    def test_quotes_and_colons_survive(self, tmp_path: Path) -> None:
+        # The old hand-built f-string frontmatter produced invalid YAML here.
+        from noscope.spec.parser import build_spec_file
+
+        tricky = 'The "Best" App: v2'
+        path = tmp_path / "s.md"
+        path.write_text(
+            build_spec_file(
+                name=tricky,
+                timebox="5m",
+                constraints=['Must say "hello"', "Use A: B"],
+                acceptance=[],
+                body="body",
+            ),
+            encoding="utf-8",
+        )
+        spec = parse_spec(path)
+        assert spec.name == tricky
+        assert spec.constraints == ['Must say "hello"', "Use A: B"]
+
+
+class TestSlugify:
+    def test_basic(self) -> None:
+        from noscope.spec.parser import slugify
+
+        assert slugify("My Project") == "my-project"
+
+    def test_strips_unsafe_characters(self) -> None:
+        from noscope.spec.parser import slugify
+
+        # A name with a path separator must not escape into a directory.
+        assert "/" not in slugify("a/../b")
+        assert slugify('The "Best": v2!') == "the-best-v2"
+
+    def test_falls_back_when_empty(self) -> None:
+        from noscope.spec.parser import slugify
+
+        assert slugify("!!!") == "spec"

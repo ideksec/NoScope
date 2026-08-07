@@ -411,7 +411,11 @@ class DockerShellTool(Tool):
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         command = args["command"]
-        timeout = min(args.get("timeout", 60), 300)
+        # Match the host shell tool: never let one container command run past a
+        # meaningful share of the remaining timebox.
+        remaining = context.deadline.remaining()
+        dynamic_cap = max(30, int(remaining * 0.15))
+        timeout = min(args.get("timeout", 60), 300, dynamic_cap)
         cwd = args.get("cwd", "/workspace")
 
         # Safety filters still apply unless --danger is set

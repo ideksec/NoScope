@@ -35,8 +35,7 @@ and the final summary shows a cost (and cache savings on Anthropic).
 These are tracked in `PLAN.md` and are acceptable for a 0.2.x preview, not for a
 stability guarantee:
 
-- No conversation-context management yet — very long runs can hit context limits.
-- `--sandbox` (Docker) uses a Python-only image; git tools still act on the host
-  tree during sandbox runs, and the exec timeout is not deadline-aware.
-- `MAX_WORKERS` is fixed at 2.
+- `--sandbox` (Docker) uses a Python-only image and git tools still act on the
+  host tree during sandbox runs.
+- Worker count defaults to 2 (`--workers` to raise).
 - Live end-to-end behavior is validated by hand, not in CI.

@@ -215,6 +215,7 @@ See the [`examples/`](examples/) directory for more spec templates.
 uv run noscope run --spec <path> --time <duration> --dir <output>
     [--provider anthropic|openai] [--model <model>]
     [--sandbox] [--danger] [--yes] [--serve]
+    [--token-budget <n>] [--workers <n>]
 
 uv run noscope new             # Create and run a project interactively
 uv run noscope doctor          # Check environment and API keys
@@ -232,6 +233,8 @@ uv run noscope init            # Create a spec file template
 | `--danger` | Bypass safety filters (use only with trusted specs) |
 | `--yes`, `-y` | Auto-approve all capability requests |
 | `--serve` | After a verified build, launch the app and stream output (blocks until Ctrl+C) |
+| `--token-budget` | Stop the build once this many total tokens are used (a spend cap alongside the timebox) |
+| `--workers` | Parallel build workers (default 2) |
 
 ---
 

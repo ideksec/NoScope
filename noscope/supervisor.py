@@ -19,8 +19,9 @@ if TYPE_CHECKING:
     from noscope.phases import TokenTracker
     from noscope.ui.console import ConsoleUI
 
-# Maximum parallel workers (beyond setup agent).
-# Keep at 2 to avoid API rate limits with concurrent LLM streams.
+# Default maximum parallel workers (beyond the setup agents). Conservative by
+# default to stay under provider rate limits with concurrent LLM streams;
+# override per run with --workers / NOSCOPE_MAX_WORKERS.
 MAX_WORKERS = 2
 
 
@@ -42,7 +43,9 @@ class Supervisor:
         deadline: Deadline,
         ui: ConsoleUI | None = None,
         tokens: TokenTracker | None = None,
+        max_workers: int = MAX_WORKERS,
     ) -> None:
+        self.max_workers = max(1, max_workers)
         self.provider = provider
         self.dispatcher = dispatcher
         self.context = context
@@ -283,7 +286,7 @@ class Supervisor:
         streams = [self._topo_sort(chain) for chain in components.values()]
 
         # Merge the smallest streams until we're within the worker limit
-        while len(streams) > MAX_WORKERS:
+        while len(streams) > self.max_workers:
             streams.sort(key=len)
             smallest = streams.pop(0)
             merged = sorted(smallest + streams[0], key=lambda t: order[t.id])

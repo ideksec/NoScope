@@ -96,8 +96,13 @@ Three design decisions worth calling out:
   JSON, missing entry point) are injected into the relevant worker's next turn
   as a correction, rather than accumulating in a log nobody reads.
 
-Concurrency is bounded at `MAX_WORKERS = 2` — a deliberate, conservative choice
-to stay under provider rate limits with several concurrent LLM streams.
+Concurrency defaults to 2 workers — a deliberate, conservative choice to stay
+under provider rate limits with several concurrent LLM streams — and is
+configurable with `--workers`.
+
+The audit agent isn't just an existence check: it compile-checks Python (and
+parses JavaScript where `node` is available), so a file that cannot even parse
+is surfaced to the worker that wrote it while there's still time to fix it.
 
 ## Tools and capability gating
 
@@ -170,6 +175,25 @@ sequenceDiagram
 The verdict is grounded in an executed command every time. A model that asserts
 success without a passing command simply doesn't get a "verified" run.
 
+## Context management
+
+Agent loops append every turn to a message list and can run for hundreds of
+iterations, with whole-file reads and large command outputs landing in context.
+Unbounded, that eventually fails on context length — and a failed request costs
+that worker its remaining tasks. [`context.py`](noscope/context.py) applies two
+cheap defenses before each request:
+
+- **`truncate_tool_output`** caps any single tool result, keeping the head and
+  tail (errors live at one end or the other) with a note of what was dropped.
+- **`trim_history`** drops the oldest turns once the conversation exceeds a
+  character budget, always keeping the system prompt and the original briefing,
+  and leaving a note telling the agent to re-read files rather than trust
+  memory of dropped output.
+
+The subtle invariant: a tool result whose assistant turn was dropped is an *API
+error*, not merely lost context. So the kept tail may never begin with a `tool`
+message — enforced in code and swept across many conversation lengths in tests.
+
 ## Two budgets: time and tokens
 
 NoScope's promise is a *spend cap*. It enforces that in both dimensions:
@@ -230,12 +254,10 @@ rather than aspirational.
 
 Honest boundaries (tracked in [`PLAN.md`](PLAN.md) and [`RELEASE.md`](RELEASE.md)):
 
-- No conversation-context management yet — very long runs can approach context
-  limits.
-- The Docker sandbox uses a Python-only image; git tools still act on the host
-  tree during `--sandbox` runs, and the container exec timeout is not
-  deadline-aware.
-- `MAX_WORKERS` is fixed at 2.
+- The Docker sandbox uses a Python-only image and git tools still act on the
+  host tree during `--sandbox` runs.
+- Worker count defaults to 2 (raise with `--workers`), tuned conservatively
+  for provider rate limits.
 - The shell safety filter is a deny-list — a backstop, not a sandbox. Untrusted
   specs should use `--sandbox`.
 - Live end-to-end behavior is validated by hand (see `RELEASE.md`), not in CI —

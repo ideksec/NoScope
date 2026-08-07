@@ -37,7 +37,7 @@ Repository = "https://github.com/ideksec/NoScope"
 Issues = "https://github.com/ideksec/NoScope/issues"
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "ruff", "mypy", "pytest-cov"]
+dev = ["pytest", "pytest-asyncio", "ruff", "mypy", "pytest-cov", "types-PyYAML"]
 
 [project.scripts]
 noscope = "noscope.cli:main"

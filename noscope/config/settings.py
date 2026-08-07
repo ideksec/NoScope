@@ -25,6 +25,8 @@ class NoscopeSettings(BaseSettings):
     effort: str = "high"
     # Optional total-token spend cap for a run (a peer to the timebox); None = no cap.
     token_budget: int | None = None
+    # Parallel build workers (beyond the setup agents).
+    max_workers: int = 2
     default_timebox: str = "30m"
     danger_mode: bool = False
 

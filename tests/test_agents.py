@@ -113,9 +113,16 @@ class TestBuildAgent:
         event_log.close()
 
 
+def _supervisor(max_workers: int = 2) -> Supervisor:
+    """A Supervisor with just the fields the pure planning helpers need."""
+    sup = Supervisor.__new__(Supervisor)
+    sup.max_workers = max_workers
+    return sup
+
+
 class TestSupervisor:
     def test_split_setup(self) -> None:
-        supervisor = Supervisor.__new__(Supervisor)
+        supervisor = _supervisor()
         tasks = _make_tasks()
         setup, remaining = supervisor._split_setup(tasks)
         assert len(setup) == 1
@@ -123,7 +130,7 @@ class TestSupervisor:
         assert len(remaining) == 3
 
     def test_partition_tasks(self) -> None:
-        supervisor = Supervisor.__new__(Supervisor)
+        supervisor = _supervisor()
         tasks = [
             PlanTask(id="t2", title="Feature A", kind="edit", depends_on=["t1"]),
             PlanTask(id="t3", title="Feature B", kind="edit", depends_on=["t1"]),
@@ -138,13 +145,13 @@ class TestSupervisor:
         assert all_ids == {"t2", "t3", "t4"}
 
     def test_partition_empty(self) -> None:
-        supervisor = Supervisor.__new__(Supervisor)
+        supervisor = _supervisor()
         assert supervisor._partition_tasks([]) == []
 
     def test_partition_groups_transitive_chains(self) -> None:
         # t4 -> t3 -> t2 is a transitive chain: all three must share a stream
         # even though t4 never directly names t2 (issue #3)
-        supervisor = Supervisor.__new__(Supervisor)
+        supervisor = _supervisor()
         tasks = [
             PlanTask(id="t2", title="Models", kind="edit", depends_on=["t1"]),
             PlanTask(id="t3", title="API", kind="edit", depends_on=["t2"]),
@@ -162,12 +169,9 @@ class TestSupervisor:
         assert any(t.id == "t5" for s in streams for t in s if s is not chain_stream)
 
     def test_partition_respects_max_workers(self) -> None:
-        from noscope.supervisor import MAX_WORKERS
-
-        supervisor = Supervisor.__new__(Supervisor)
         tasks = [PlanTask(id=f"t{i}", title=f"Task {i}", kind="edit") for i in range(2, 10)]
-        streams = supervisor._partition_tasks(tasks)
-        assert len(streams) <= MAX_WORKERS
+        streams = _supervisor()._partition_tasks(tasks)
+        assert len(streams) <= 2
         all_ids = {t.id for s in streams for t in s}
         assert all_ids == {t.id for t in tasks}
 
@@ -181,7 +185,7 @@ class TestSupervisor:
         assert [t.id for t in result] == ["t2", "t3"]
 
     def test_split_setup_with_no_setup_keyword(self) -> None:
-        supervisor = Supervisor.__new__(Supervisor)
+        supervisor = _supervisor()
         tasks = [
             PlanTask(id="t1", title="Create API routes", kind="edit"),
             PlanTask(id="t2", title="Add database", kind="edit"),
@@ -342,3 +346,43 @@ class TestTokenBudget:
         await agent.run([PlanTask(id="t1", title="Build", kind="edit")], "Build it.")
         event_log.close()
         assert calls["n"] == 1  # stopped after the first over-budget call
+
+
+class TestAuditSyntaxChecks:
+    @pytest.mark.asyncio
+    async def test_detects_python_syntax_error(self, tool_context: ToolContext) -> None:
+        from noscope.tools.dispatcher import ToolDispatcher
+        from noscope.tools.shell import ShellTool
+
+        (tool_context.workspace / "requirements.txt").write_text("flask\n")
+        (tool_context.workspace / "app.py").write_text("def broken(:\n")
+
+        dispatcher = ToolDispatcher()
+        dispatcher.register(ShellTool())
+        audit = AuditAgent(
+            dispatcher=dispatcher,
+            context=tool_context,
+            event_log=tool_context.event_log,
+            deadline=tool_context.deadline,
+        )
+        findings = await audit._run_checks()
+        assert any(f["type"] == "syntax_error" for f in findings)
+
+    @pytest.mark.asyncio
+    async def test_clean_python_passes(self, tool_context: ToolContext) -> None:
+        from noscope.tools.dispatcher import ToolDispatcher
+        from noscope.tools.shell import ShellTool
+
+        (tool_context.workspace / "requirements.txt").write_text("flask\n")
+        (tool_context.workspace / "app.py").write_text("def fine():\n    return 1\n")
+
+        dispatcher = ToolDispatcher()
+        dispatcher.register(ShellTool())
+        audit = AuditAgent(
+            dispatcher=dispatcher,
+            context=tool_context,
+            event_log=tool_context.event_log,
+            deadline=tool_context.deadline,
+        )
+        findings = await audit._run_checks()
+        assert not any(f["type"] == "syntax_error" for f in findings)

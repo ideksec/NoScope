@@ -7,7 +7,7 @@ import re
 
 import pytest
 
-from noscope.tools.docker import build_write_command, safe_container_path
+from noscope.tools.docker import build_write_command, preflight_docker, safe_container_path
 
 
 class TestSafeContainerPath:
@@ -59,3 +59,49 @@ class TestBuildWriteCommand:
     def test_rejects_unsafe_path(self) -> None:
         with pytest.raises(ValueError):
             build_write_command("../escape.py", "data")
+
+
+@pytest.mark.asyncio
+class TestPreflightDocker:
+    async def test_missing_binary_is_explained(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("noscope.tools.docker.shutil.which", lambda _: None)
+        problem = await preflight_docker()
+        assert problem is not None
+        assert "docker" in problem
+        # The point of the check is telling the user what to do instead.
+        assert "--sandbox" in problem
+
+    async def test_unreachable_daemon_reports_what_it_said(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("noscope.tools.docker.shutil.which", lambda _: "/usr/bin/docker")
+
+        async def fake_exec(*args: object, **kwargs: object) -> object:
+            class _Proc:
+                returncode = 1
+
+                async def communicate(self) -> tuple[bytes, bytes]:
+                    return b"", b"Cannot connect to the Docker daemon\nmore detail"
+
+            return _Proc()
+
+        monkeypatch.setattr("noscope.tools.docker.asyncio.create_subprocess_exec", fake_exec)
+        problem = await preflight_docker()
+        assert problem is not None
+        assert "daemon is not reachable" in problem
+        assert "Cannot connect to the Docker daemon" in problem
+
+    async def test_healthy_daemon_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("noscope.tools.docker.shutil.which", lambda _: "/usr/bin/docker")
+
+        async def fake_exec(*args: object, **kwargs: object) -> object:
+            class _Proc:
+                returncode = 0
+
+                async def communicate(self) -> tuple[bytes, bytes]:
+                    return b"27.0.3\n", b""
+
+            return _Proc()
+
+        monkeypatch.setattr("noscope.tools.docker.asyncio.create_subprocess_exec", fake_exec)
+        assert await preflight_docker() is None

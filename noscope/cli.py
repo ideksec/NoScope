@@ -131,9 +131,19 @@ def doctor(
     git_ok = shutil.which("git") is not None
     checks.append(("git", git_ok, shutil.which("git") or "not found"))
 
-    # Docker
-    docker_ok = shutil.which("docker") is not None
-    checks.append(("docker (optional)", docker_ok, shutil.which("docker") or "not found"))
+    # Docker — the binary existing says nothing about --sandbox working, so
+    # check the daemon too. This is the exact check `run --sandbox` performs.
+    from noscope.tools.docker import preflight_docker
+
+    docker_problem = asyncio.run(preflight_docker(timeout=5.0))
+    docker_ok = docker_problem is None
+    checks.append(
+        (
+            "docker (optional, for --sandbox)",
+            docker_ok,
+            "daemon reachable" if docker_ok else "unusable — see below",
+        )
+    )
 
     # uv
     uv_ok = shutil.which("uv") is not None
@@ -143,6 +153,10 @@ def doctor(
         icon = "[green]✓[/green]" if ok else "[red]✗[/red]"
         detail_str = f" ({detail})" if detail else ""
         console.print(f"  {icon} {name}{detail_str}")
+
+    if docker_problem:
+        # Optional, so it doesn't fail the run — but say what's actually wrong.
+        console.print(f"\n  [dim]{docker_problem}[/dim]")
 
     all_ok = all(ok for name, ok, _ in checks if "optional" not in name)
 

@@ -301,6 +301,19 @@ NoScope executes LLM-generated code on your machine. It ships with multiple laye
 - **Docker sandbox** — optional container isolation with resource limits
 - **Secret redaction** — API keys are scrubbed from event logs
 
+### About `--sandbox`
+
+`--sandbox` runs every agent action inside a container with **no host mounts** —
+files are copied in at start and back out at stop — under a memory/CPU cap, with
+all Linux capabilities dropped except the handful a build needs, and
+`no-new-privileges` set. It needs a reachable Docker daemon; `noscope doctor`
+tells you whether you have one, and `run --sandbox` checks before spending a
+single token rather than failing mid-build.
+
+Without `--sandbox`, commands run on the host. They are still capability-gated
+and safety-filtered, but a deny-list is not a security boundary — use
+`--sandbox` for specs you did not write yourself.
+
 See [SECURITY.md](.github/SECURITY.md) for the full security model, known limitations, and how to report vulnerabilities.
 
 ---

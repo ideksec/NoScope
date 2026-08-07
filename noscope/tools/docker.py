@@ -11,6 +11,7 @@ import asyncio
 import base64
 import posixpath
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +63,54 @@ def build_write_command(rel_path: str, content: str) -> str:
     parent = posixpath.dirname(path)
     mkdir = f"mkdir -p '/workspace/{parent}' && " if parent else ""
     return f"{mkdir}printf %s '{b64}' | base64 -d > '/workspace/{path}'"
+
+
+async def preflight_docker(timeout: float = 15.0) -> str | None:
+    """Check that ``--sandbox`` can actually work. Returns an error, or None.
+
+    Run this *before* the first model call. A sandbox that only fails once the
+    build is underway wastes the timebox and the tokens already spent, and the
+    raw daemon error ("Cannot connect to the Docker daemon at
+    unix:///var/run/docker.sock") doesn't tell the user what to do.
+    """
+    if shutil.which("docker") is None:
+        return (
+            "--sandbox needs Docker, but the `docker` command was not found.\n"
+            "  Fix: install Docker Desktop or the Docker Engine, or drop --sandbox\n"
+            "       to run on the host (commands are still safety-filtered)."
+        )
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker",
+            "info",
+            "--format",
+            "{{.ServerVersion}}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except TimeoutError:
+        await kill_process_group(proc)
+        return (
+            f"The Docker daemon did not respond within {timeout:.0f}s.\n"
+            "  Fix: check that Docker is running, then retry."
+        )
+    except OSError as e:
+        return f"Could not run docker: {e}"
+
+    if proc.returncode != 0:
+        detail = stderr.decode("utf-8", errors="replace").strip().splitlines()
+        first = detail[0] if detail else "unknown error"
+        return (
+            "The `docker` command exists but the daemon is not reachable.\n"
+            "  Fix: start Docker (Docker Desktop, or `sudo systemctl start docker`),\n"
+            "       or drop --sandbox to run on the host.\n"
+            f"  Daemon said: {first}"
+        )
+
+    return None
 
 
 class DockerSandbox:

@@ -143,6 +143,50 @@ class TestFullPipeline:
         assert "run.complete" in types
         assert "acceptance.check" in types
 
+    def test_sandbox_preflight_aborts_before_spending_tokens(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An unusable --sandbox must stop the run *before* PLAN. Discovering it
+        # mid-build wastes both the timebox and the tokens already spent.
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("NOSCOPE_ANTHROPIC_API_KEY", "test-key")
+
+        async def no_docker(timeout: float = 15.0) -> str:
+            return "Docker is not available in this test."
+
+        monkeypatch.setattr("noscope.orchestrator.preflight_docker", no_docker)
+
+        from noscope.config.settings import load_settings
+        from noscope.orchestrator import Orchestrator
+
+        calls = 0
+
+        class _CountingProvider(ScriptedProvider):
+            async def complete(self, *args: Any, **kwargs: Any) -> LLMResponse:
+                nonlocal calls
+                calls += 1
+                return await super().complete(*args, **kwargs)
+
+        orch = Orchestrator(load_settings(), console=Console(file=io.StringIO()))
+        orch.provider = _CountingProvider()  # type: ignore[assignment]
+
+        run_path = asyncio.run(
+            orch.run(
+                spec_input=SpecInput(name="Demo", timebox="5m"),
+                output_dir=tmp_path / "out",
+                sandbox=True,
+                auto_approve=True,
+            )
+        )
+
+        types = [
+            json.loads(line)["type"]
+            for line in (run_path / "events.jsonl").read_text().splitlines()
+            if line.strip()
+        ]
+        assert "run.aborted" in types
+        assert calls == 0, "aborted before PLAN, so no model call should have happened"
+
     def test_handoff_runs_even_when_planning_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

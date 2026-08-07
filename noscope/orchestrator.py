@@ -37,6 +37,7 @@ from noscope.tools.docker import (
     DockerSandbox,
     DockerShellTool,
     DockerWriteFileTool,
+    preflight_docker,
 )
 from noscope.tools.filesystem import (
     CreateDirectoryTool,
@@ -179,6 +180,18 @@ class Orchestrator:
         dispatcher = ToolDispatcher()
 
         if sandbox:
+            # Fail here, before PLAN — a sandbox that dies mid-build has already
+            # burned tokens and timebox for nothing.
+            problem = await preflight_docker()
+            if problem:
+                self.ui.console.print(f"\n[red]Sandbox unavailable[/red]\n  {problem}\n")
+                event_log.emit(
+                    phase="INIT",
+                    event_type="run.aborted",
+                    summary="Docker sandbox unavailable",
+                    data={"reason": problem},
+                )
+                return run_dir.path
             docker_sandbox = DockerSandbox(workspace)
             await docker_sandbox.ensure_running()
             self.ui.console.print(
